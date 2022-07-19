@@ -10,12 +10,13 @@ import os
 '''
 Dataloader subclass for few-shot action recognition tasks formatted in the style of FSL-Video.
 Code adapted from dataset.py in FSL-Video repo.
+Performs the exact same operations, just condenses SetDataManager setup into a single invocation.
 
 Samples tasks/datapoints one at a time.
 Task/Datapoint Format:
     Tensor of shape (n_way, n_support + n_query, num_segments, image_channels, image_height, image_width)
 '''
-class FewShotVideoDataLoader(torch.utils.data.DataLoader):
+class FSL_DataLoader(torch.utils.data.DataLoader):
     '''
     Args:
         data_filepath (str):    Path to the split file, which specifies frame folder and class index for each video in one some split of the dataset.
@@ -25,7 +26,7 @@ class FewShotVideoDataLoader(torch.utils.data.DataLoader):
         n_query (int):          Number of videos a model must predict for each category in each few-shot task/datapoint sampled.
         num_segments (int):     Number of frames to uniformly sample from each video.
         image_size (int):       Width/Height to which dataset video frames will be resized.
-        augment (bool):         Option to enable augmentation via random cropping and image jitter.
+        augment (bool):         Option to enable augmentation via random cropping, image jitter and non-uniform frame sampling.
     '''
     def __init__(self, data_filepath: str, n_episodes: int, n_way: int, n_support: int, n_query: int, num_segments: int,
                  image_size: int = 224, augment: bool = False):
