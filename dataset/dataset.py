@@ -5,7 +5,7 @@ import numpy as np
 
 '''
 Dataloaders which read dataset split files in the format of FSL-Video,
-returning video datapoints as filesystem paths to a folder of ordered image frames.
+returning video datapoints as filesystem paths to video files.
 
 NOTE: Category names are currently extracted from dataset folder structure, in which
 each category is associated with a folder labeled as "<category_index + 1>.<category_name>"
@@ -21,7 +21,7 @@ def category_name_from_video_path(video_path):
 '''
 Simple dataset for filling video embedding caches.
 This just iterates through all videos referenced in the given dataset split file.
-Each element is a single video, referenced as a path to a folder of ordered frames.
+Each element is a single video, referenced as a file path.
 '''
 class SequentialVideoDataset(torch.utils.data.Dataset):
     '''
@@ -34,13 +34,13 @@ class SequentialVideoDataset(torch.utils.data.Dataset):
         with open(data_split_filepath, 'r') as fp:
             data_split = [x.strip().split(' ') for x in fp]
             
-        self.video_frame_paths = [x[0] for x in data_split]
+        self.video_paths = [x[3] for x in data_split]
     
     def __getitem__(self, i):
-        return self.video_frame_paths[i]
+        return self.video_paths[i]
     
     def __len__(self):
-        return len(self.video_frame_paths)
+        return len(self.video_paths)
     
 
 '''
@@ -59,10 +59,10 @@ class SequentialCategoryNameDataset(torch.utils.data.Dataset):
             data_split = [x.strip().split(' ') for x in fp]
         
         category_names_by_index = {}
-        for (video_frames_path, frame_count, category_index) in data_split:
+        for (video_frames_path, frame_count, category_index, video_path) in data_split:
             category_index = int(category_index)
             if category_index not in category_names_by_index:
-                category_names_by_index[category_index] = category_name_from_video_path(video_frames_path)
+                category_names_by_index[category_index] = category_name_from_video_path(video_path)
                 
         self.category_names = list(category_names_by_index.items())
     
@@ -78,7 +78,7 @@ class SequentialCategoryNameDataset(torch.utils.data.Dataset):
 Few-Shot task dataset for sampling few-shot tasks.
 Task sampling algorithm matches that used in FSL-Video.
 Each element is a tuple with two elements:
-    1.  An array of video references (frame folder path),
+    1.  An array of video paths,
         with shape (n_way, n_support + n_query)
     2.  An array of names for the categories used in the task
         with shape (n_way,)
@@ -86,7 +86,7 @@ Each element is a tuple with two elements:
 class FewShotTaskDataset(torch.utils.data.IterableDataset):
     '''
     Args:
-        data_split_filepath (str):  Path to the split file, which specifies frame folder and class index for each video in one some split of the dataset.
+        data_split_filepath (str):  Path to the split file, which specifies frame folder, video path and class index for each video in one some split of the dataset.
         n_episodes (int):           Number of few-shot tasks/datapoints that can be sampled from this dataset. This sets the dataset instance's length.
         n_way (int):                Number of categories given in each few-shot task/datapoint sampled.
         n_support (int):            Number of example videos for each category in each few-shot task/datapoint sampled.
@@ -100,11 +100,11 @@ class FewShotTaskDataset(torch.utils.data.IterableDataset):
         
         # Collect all videos for each category
         vid_paths_by_category = {}
-        for (video_frames_path, frame_count, category_index) in data_split:
+        for (video_frames_path, frame_count, category_index, video_path) in data_split:
             category_index = int(category_index)
             if category_index not in vid_paths_by_category:
                 vid_paths_by_category[category_index] = []
-            vid_paths_by_category[category_index].append(video_frames_path)
+            vid_paths_by_category[category_index].append(video_path)
         
         self.category_indices = np.unique(list(vid_paths_by_category.keys()))
         

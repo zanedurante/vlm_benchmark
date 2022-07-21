@@ -9,10 +9,11 @@ from tqdm import tqdm
 Given a dataset containing mp4 videos (class_folder/video.mp4), creates a frame-by-frame version of the dataset (class_folder/video_folder/frame.jpg),
 then create txt files for train, val and test splits, each of which contains references to frame folders for each class, etc.
 Splits follow the formats and class splits used in the FSL-Video repo.
+Unlike FSL-Video format, these splits also include a reference to the original video file for each sample included in the split
 '''
 
 DATA_FOLDER = "D:/datasets/PAC/few_shot_act_reg"
-DATASET_NAME = "kinetics_newbenchmark"
+DATASET_NAME = "smsm_cmn"
 SOURCE_VIDEO_DATASET_PATH = f"{DATA_FOLDER}/{DATASET_NAME}"
 
 TARGET_FRAME_DATASET_PATH = f"{DATA_FOLDER}/{DATASET_NAME}_frames"
@@ -75,4 +76,4 @@ for i, cls in enumerate(tqdm(cls_folder_names)):
                     success, frame = vidcap.read()
                 
             # Save reference to sample in split txt file
-            target_split_file.write(f"{sample_frame_folder_path} {framecount} {i}\n")
+            target_split_file.write(f"{sample_frame_folder_path} {framecount} {i} {sample_video_path}\n")
