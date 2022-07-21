@@ -60,6 +60,7 @@ class VTTWINS_SimilarityVLM(SimilarityVLM):
     def open_video(self, path):
         duration = self.spoof_dataloader._get_duration(path)
         video = self.spoof_dataloader._get_video(path, 0, float(duration), self.spoof_dataloader.num_clip)
+        video /= 255
         return video
     
     def transform(self, video):
