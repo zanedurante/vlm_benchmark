@@ -70,8 +70,8 @@ class VTTWINS_SimilarityVLM(SimilarityVLM):
             video = video.float().to(DEVICE)
             return self.model.forward_video(video).mean(dim=0).cpu().numpy()
     
-    def get_similarity(self, text_embed, video_embed):
-        return np.dot(text_embed, video_embed.T)
+    def default_similarity_metric(self) -> Similarity:
+        return Similarity.DOT
     
     
     
