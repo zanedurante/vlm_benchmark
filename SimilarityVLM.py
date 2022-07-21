@@ -3,6 +3,8 @@ import torch
 import pickle
 import os
 
+from similarity_metrics import Similarity
+
 
 class SimilarityVLM(ABC):
     """
@@ -141,12 +143,9 @@ class SimilarityVLM(ABC):
         pass
 
     @abstractmethod
-    def get_similarity(self, text_embed, video_embed):
+    def default_similarity_metric(self) -> Similarity:
         """
-        Similarity score between text and video embeddings
-        :param text_embed:
-        :param video_embed:
-        :return: Float where higher number --> more similar
+        Returns a reference to the default similarity metric used by this VLM
+        :return:
         """
-        # TODO: Add class for distance functions for easier configuration
         pass
