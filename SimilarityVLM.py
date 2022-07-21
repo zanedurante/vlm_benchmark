@@ -23,7 +23,7 @@ class SimilarityVLM(ABC):
         self.cache_dir = cache_dir
         self.reset_cache = reset_cache
         self.embed_cache = {}  # Initialize self.embed_cache to empty dictionary, maps video path --> tensor path
-        self.load_cache(cache_file)  # Initialize self.embed_cache
+        self.load_cache()  # Initialize self.embed_cache
         self.load_model(path)
 
     def load_cache(self):
@@ -33,16 +33,19 @@ class SimilarityVLM(ABC):
         """
         if self.cache_file is not None:
             self.use_cache = True
-        with open(self.cache_file, "rb") as cf:
-            self.embed_cache = pickle.load(cf)
+            
+        if self.use_cache:
+            with open(self.cache_file, "rb") as cf:
+                self.embed_cache = pickle.load(cf)
 
     def save_cache(self):
         """
         Saves the cached video embeddings.  Note: this needs to be called in the script using the SimilarityVLM
         :return:
         """
-        with open(self.cache_file, "wb") as cf:
-            pickle.dump(self.embed_cache, cf)
+        if self.use_cache:
+            with open(self.cache_file, "wb") as cf:
+                pickle.dump(self.embed_cache, cf)
 
     def cache(self, path, video_embed):
         """
@@ -51,10 +54,10 @@ class SimilarityVLM(ABC):
         :param video_embed: Embedding created by Similarity VLM
         :return:
         """
-        path_to_cached = os.path.join(self.cache_dir, path)
-        torch.save(video_embed, path_to_cached)
-        self.embed_cache[path] = path_to_cached
-        return
+        if self.use_cache:
+            path_to_cached = os.path.join(self.cache_dir, path)
+            torch.save(video_embed, path_to_cached)
+            self.embed_cache[path] = path_to_cached
 
     def get_text_embeds(self, text):
         """
