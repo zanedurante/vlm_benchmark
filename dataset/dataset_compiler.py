@@ -13,7 +13,7 @@ Unlike FSL-Video format, these splits also include a reference to the original v
 '''
 
 DATA_FOLDER = "D:/datasets/PAC/few_shot_act_reg"
-DATASET_NAME = "smsm_cmn"
+DATASET_NAME = "kinetics_100"
 SOURCE_VIDEO_DATASET_PATH = f"{DATA_FOLDER}/{DATASET_NAME}"
 
 TARGET_FRAME_DATASET_PATH = f"{DATA_FOLDER}/{DATASET_NAME}_frames"
@@ -31,15 +31,20 @@ def join(*paths):
 video -> frames and split
 '''
 os.makedirs(TARGET_FRAME_DATASET_PATH, exist_ok=True)
-os.makedirs(TARGET_SPLIT_DATASET_PATH)
+os.makedirs(TARGET_SPLIT_DATASET_PATH, exist_ok=True)
+
+# Clear any existing split files
+for split_file in listdir(TARGET_SPLIT_DATASET_PATH):
+    if split_file in ["train.txt", "val.txt", "test.txt"]:
+        os.remove(join(TARGET_SPLIT_DATASET_PATH, split_file))
 
 cls_folder_names = [f for f in listdir(SOURCE_VIDEO_DATASET_PATH) if isdir(join(SOURCE_VIDEO_DATASET_PATH, f))]
 cls_folder_names.sort()
 
 for i, cls in enumerate(tqdm(cls_folder_names)):
-    source_cls_folder_path = join(SOURCE_VIDEO_DATASET_PATH, cls)
-    target_cls_folder_path = join(TARGET_FRAME_DATASET_PATH, cls)
-    os.makedirs(target_cls_folder_path)
+    source_cls_vid_folder_path = join(SOURCE_VIDEO_DATASET_PATH, cls)
+    target_cls_frame_folder_path = join(TARGET_FRAME_DATASET_PATH, cls)
+    os.makedirs(target_cls_frame_folder_path, exist_ok=True)
     
     if i <= 63:
         target_split_filename = "train.txt"
@@ -51,17 +56,17 @@ for i, cls in enumerate(tqdm(cls_folder_names)):
     with open(join(TARGET_SPLIT_DATASET_PATH, target_split_filename), "a") as target_split_file:    
         # Collect and shuffle all samples in class
         sample_filenames = [
-            sample_filename for sample_filename in listdir(source_cls_folder_path)
-            if isfile(join(source_cls_folder_path, sample_filename)) and sample_filename[0] != "."
+            sample_filename for sample_filename in listdir(source_cls_vid_folder_path)
+            if isfile(join(source_cls_vid_folder_path, sample_filename)) and sample_filename[0] != "."
         ]
         random.shuffle(sample_filenames)
         
         # For each sample, save frames and add reference in split file
         for sample_filename in tqdm(sample_filenames, leave=False):
-            sample_video_path = join(source_cls_folder_path, sample_filename)
+            sample_video_path = join(source_cls_vid_folder_path, sample_filename)
             
             sample_name = splitext(sample_filename)[0]
-            sample_frame_folder_path = join(target_cls_folder_path, sample_name)
+            sample_frame_folder_path = join(target_cls_frame_folder_path, sample_name)
             
             # Save frames to folder            
             if not exists(sample_frame_folder_path):
@@ -74,6 +79,8 @@ for i, cls in enumerate(tqdm(cls_folder_names)):
                     cv2.imwrite(join(sample_frame_folder_path, IMAGE_TEMPLATE.format(framecount)), frame)
 
                     success, frame = vidcap.read()
+            else:
+                framecount = len(listdir(sample_frame_folder_path))
                 
             # Save reference to sample in split txt file
             target_split_file.write(f"{sample_frame_folder_path} {framecount} {i} {sample_video_path}\n")
