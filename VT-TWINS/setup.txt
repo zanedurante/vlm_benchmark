@@ -1,0 +1,14 @@
+ENV CREATION
+
+conda create --name VLM_VTTWINS python=3.9 -y
+conda activate VLM_VTTWINS
+conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch -y
+conda install -c conda-forge ffmpeg-python pandas numpy tqdm scikit-learn numba=0.53.1 -y
+
+
+
+FILE DOWNLOADS
+
+VT-TWINS/VT-TWINS/data/dict.npy <-- https://drive.google.com/file/d/1TBRmxEmANrOPO0HlBkKoYS65Q0Lk4ixZ/view?usp=sharing
+VT-TWINS/VT-TWINS/data/word2vec.pth <-- https://drive.google.com/file/d/1fEPmgV5nJZl6hJYEWvy92rJPbxLYGKam/view?usp=sharing
+VT-TWINS/VT-TWINS/checkpoints/pretrained.pth <-- https://drive.google.com/file/d/10khxtVotQV_izhzVrp7oBeerwTAWIpYV/view?usp=sharing
