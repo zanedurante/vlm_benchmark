@@ -1,5 +1,6 @@
 import SimilarityVLM
 from transformers import CLIPModel, CLIPTokenizer
+from similarity_metrics import Similarity
 
 
 class ClipVLM(SimilarityVLM):
@@ -71,20 +72,9 @@ class ClipVLM(SimilarityVLM):
         video_features = self.model.get_image_features(**video)  # Frame-level video features
         return video_features
 
-    def get_similarity(self, text_embed, video_embed):
+    def default_similarity_metric(self) -> Similarity:
         """
-        Similarity score between text and video embeddings
-        :param text_embed:
-        :param video_embed:
-        :return: Float where higher number --> more similar
+        Returns a reference to the default similarity metric used by this VLM
+        :return:
         """
-        # TODO: Move this to new file that has similarity metrics
-        # Code modified from: https://github.com/openai/CLIP/blob/main/clip/model.py
-        # Uses cosine similarity (equivalent to dot product of normalized vectors)
-
-        # normalize features + dot product
-        video_features = video_embed / video_embed.norm(dim=1, keepdim=True)
-        text_features = text_embed / text_embed.norm(dim=1, keepdim=True)
-        similarity_per_video = video_features @ text_features.t()
-
-        return similarity_per_video
+        return Similarity.COSINE
