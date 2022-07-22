@@ -18,12 +18,18 @@ class SimilarityVLM(ABC):
         :param reset_cache: Whether to delete (reset) the existing cache.  This should=True when changes to the
                 model or data loading have been made and the video embeddings need to be recomputed.
         """
+
+        # Load cache and set cache flags
         self.use_cache = False  # Set to true in load_cache if cache_file is not None
         self.cache_file = cache_file
         self.cache_dir = cache_dir
         self.reset_cache = reset_cache
         self.embed_cache = {}  # Initialize self.embed_cache to empty dictionary, maps video path --> tensor path
         self.load_cache(cache_file)  # Initialize self.embed_cache
+
+        # Load video and text encoders
+        self.video_encoder = None
+        self.text_encoder = None
         self.load_model(path)
 
     def load_cache(self):
@@ -59,8 +65,9 @@ class SimilarityVLM(ABC):
     def get_text_embeds(self, text):
         """
         Embeds text one string at a time
-        :param text: String to embed
+        :param text: List of strings to embed
         :return: Pytorch embedding tensor for the text
+        TODO: Cache text embeddings
         """
         tokens = self.tokenize(text)
         text_embed = self.text_encoder(tokens)
