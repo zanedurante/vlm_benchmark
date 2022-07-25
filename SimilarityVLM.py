@@ -73,9 +73,9 @@ class SimilarityVLM(ABC):
         :return:
         """
         if self.use_cache:
-            path_to_cached = os.path.join(self.cache_dir, path.strip("/").replace("/", "."))
-            torch.save(video_embed, path_to_cached)
-            self.embed_cache[path] = path_to_cached
+            embed_filename = path.strip("/").replace("/", ".")
+            torch.save(video_embed, os.path.join(self.cache_dir, embed_filename))
+            self.embed_cache[path] = embed_filename
 
     def get_text_embeds(self, text):
         """
@@ -96,7 +96,7 @@ class SimilarityVLM(ABC):
         :return:
         """
         if path in self.embed_cache:
-            return torch.load(self.embed_cache[path])  # Note: May need to add .cuda() or change dtype
+            return torch.load(os.path.join(self.cache_dir, self.embed_cache[path]))  # Note: May need to add .cuda() or change dtype
 
         video = self.open_video(path)
         video = self.transform(video)
