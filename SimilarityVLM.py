@@ -28,11 +28,6 @@ class SimilarityVLM(ABC):
         self.reset_cache = reset_cache
         self.embed_cache = {}  # Initialize self.embed_cache to empty dictionary, maps video path --> tensor path
         self.load_cache()  # Initialize self.embed_cache
-
-        # Load video and text encoders
-        self.video_encoder = None
-        self.text_encoder = None
-        self.load_cache()  # Initialize self.embed_cache
         self.load_model(path)
 
     def load_cache(self):
@@ -40,12 +35,26 @@ class SimilarityVLM(ABC):
         Loads cache of precomputed video embeddings for each video path string
         :return:
         """
-        if self.cache_file is not None:
+        if self.cache_file is not None and self.cache_dir is not None:
             self.use_cache = True
-
+            
+        # Optionally delete cache before init
+        if self.use_cache and self.reset_cache:
+            if os.path.exists(self.cache_file):
+                os.remove(self.cache_file)
+            if os.path.exists(self.cache_dir):
+                for embed_file in os.listdir(self.cache_dir):
+                    os.remove(os.path.join(self.cache_dir, embed_file))
+                os.rmdir(self.cache_dir)
+                
+        # Init cache
         if self.use_cache:
-            with open(self.cache_file, "rb") as cf:
-                self.embed_cache = pickle.load(cf)
+            if os.path.exists(self.cache_file) and os.path.exists(self.cache_dir):
+                with open(self.cache_file, "rb") as cf:
+                    self.embed_cache = pickle.load(cf)
+            else:
+                os.makedirs(self.cache_dir, exist_ok=True)
+                self.embed_cache = {}
 
     def save_cache(self):
         """
@@ -64,7 +73,7 @@ class SimilarityVLM(ABC):
         :return:
         """
         if self.use_cache:
-            path_to_cached = os.path.join(self.cache_dir, path)
+            path_to_cached = os.path.join(self.cache_dir, path.strip("/").replace("/", "."))
             torch.save(video_embed, path_to_cached)
             self.embed_cache[path] = path_to_cached
 

@@ -11,12 +11,20 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "VT-TWINS"))
 from s3dg import S3D
 from loader.msrvtt_loader import MSRVTT_DataLoader
 
-REPO_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "VT-TWINS")
+FILE_DIR = os.path.dirname(os.path.realpath(__file__))
+REPO_PATH = os.path.join(FILE_DIR, "VT-TWINS")
+
+# Pretrained files for loading various parts of the VLM
 WORD2VEC_PATH = "data/word2vec.pth"
 TOKEN_DICT_PATH = "data/dict.npy"
 PRETRAINED_PATH = "checkpoints/pretrained.pth.tar"
 
+# Default VLM parameters
 DEFAULT_EMBED_DIM = 512
+
+# Cache file location
+CACHE_INDEX_NAME = "cache_index.pickle"
+CACHE_DIR_NAME = "cache_dir"
 
 class SpoofDataLoader(MSRVTT_DataLoader):
     def __init__(self):
@@ -31,7 +39,7 @@ class SpoofDataLoader(MSRVTT_DataLoader):
         self.word_to_token = {w: t + 1 for t, w in enumerate(np.load(os.path.join(REPO_PATH, TOKEN_DICT_PATH)))}
 
 class VTTWINS_SimilarityVLM(SimilarityVLM):
-    def __init__(self):
+    def __init__(self, reset_cache: bool = False):
         # Create model
         self.model = S3D(word2vec_path=WORD2VEC_PATH, token_to_word_path=TOKEN_DICT_PATH)
         self.model.to(DEVICE)
@@ -40,8 +48,15 @@ class VTTWINS_SimilarityVLM(SimilarityVLM):
         # Create spoof object to run dataloader video loading methods against
         self.spoof_dataloader = SpoofDataLoader()
         
+        # Location for pretrained weights
         pretrained_path = os.path.join(REPO_PATH, PRETRAINED_PATH)
-        super().__init__(pretrained_path)
+        
+        # Setup cache
+        cache_index_path = os.path.join(FILE_DIR, CACHE_INDEX_NAME)
+        cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
+        os.makedirs(cache_dir_path, exist_ok=True)
+        
+        super().__init__(pretrained_path, cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
         
     def load_model(self, path):
         checkpoint = torch.load(path, map_location="cpu")

@@ -12,7 +12,7 @@ Splits follow the formats and class splits used in the FSL-Video repo.
 Unlike FSL-Video format, these splits also include a reference to the original video file for each sample included in the split
 '''
 
-DATA_FOLDER = "D:/datasets/PAC/few_shot_act_reg"
+DATA_FOLDER = "/home/datasets"
 DATASET_NAME = "kinetics_100"
 SOURCE_VIDEO_DATASET_PATH = f"{DATA_FOLDER}/{DATASET_NAME}"
 
