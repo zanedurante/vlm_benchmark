@@ -26,7 +26,9 @@ class FewShotClassifier:
     This is used to differentiate test results which use different classifier parameters.
     '''
     def params(self) -> dict:
-        return {}
+        return {
+            "metric": self.metric.name
+        }
         
     '''
     Predicts categories for a set of query videos in a few-shot task (formatted like FewShotTaskDataset)
