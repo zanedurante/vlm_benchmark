@@ -16,7 +16,7 @@ TOKEN_DICT_PATH = "data/dict.npy"
 PRETRAINED_PATH = "checkpoints/pretrained.pth.tar"
 
 # Import from VT-TWINS repo
-sys.path.append(os.path.join(os.path.dirname(__file__), "VT-TWINS"))
+sys.path.append(REPO_PATH)
 from s3dg import S3D
 from loader.msrvtt_loader import MSRVTT_DataLoader
 

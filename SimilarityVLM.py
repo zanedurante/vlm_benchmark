@@ -29,6 +29,15 @@ class SimilarityVLM(ABC):
         self.embed_cache = {}  # Initialize self.embed_cache to empty dictionary, maps video path --> tensor path
         self.load_cache()  # Initialize self.embed_cache
         self.load_model(path)
+        
+    def params(self) -> dict:
+        """
+        Specify the value of all VLM-specific parameters which may affect prediction accuracy.
+        This is used to differentiate test results which use different versions of the same VLM.
+        :return:
+        :rtype: dict
+        """
+        return {}
 
     def load_cache(self):
         """

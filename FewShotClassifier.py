@@ -21,6 +21,14 @@ class FewShotClassifier:
         self.metric = metric or vlm.default_similarity_metric()
         
     '''
+    Returns a dict with the value of all classifier-specific parameters which may affect prediction
+    accuracy (apart from the underlying VLM object used).
+    This is used to differentiate test results which use different classifier parameters.
+    '''
+    def params(self) -> dict:
+        return {}
+        
+    '''
     Predicts categories for a set of query videos in a few-shot task (formatted like FewShotTaskDataset)
     Args:
         category_names (np.array):          Array of names for each given few-shot category.

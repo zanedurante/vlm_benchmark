@@ -31,6 +31,8 @@ class ClipVLM(SimilarityVLM):
         self.model = None
         self.tokenizer = None
         self.processor = None
+        
+        self.path = path  # Pretrained CLIP identifier
         self.num_frames = num_frames  # The number of frames CLIP will use to classify videos
         self.sample_strat = sample_strat  # 'rand' or 'uniform'
 
@@ -41,6 +43,19 @@ class ClipVLM(SimilarityVLM):
         cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
 
         super().__init__(path, cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
+        
+    def params(self) -> dict:
+        """
+        Specify the value of all VLM-specific parameters which may affect prediction accuracy.
+        This is used to differentiate test results which use different versions of the same VLM.
+        :return:
+        :rtype: dict
+        """
+        return {
+            "path": self.path,
+            "num_frames": self.num_frames,
+            "sample_strat": self.sample_strat
+        }
 
     def load_model(self, path="openai/clip-vit-base-patch32"):
         """
