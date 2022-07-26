@@ -3,7 +3,7 @@ from pytube import YouTube
 import os
 import numpy as np
 
-from CLIPVLM import ClipVLM
+from CLIP.CLIPVLM import ClipVLM
 from similarity_metrics import Similarity
 
 VIDEO_DIR_PATH = "./test_videos/"

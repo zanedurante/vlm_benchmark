@@ -1,15 +1,11 @@
+import importlib
 import numpy as np
 import os, sys
 
 import torch
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from SimilarityVLM import *
-
-sys.path.append(os.path.join(os.path.dirname(__file__), "VT-TWINS"))
-from s3dg import S3D
-from loader.msrvtt_loader import MSRVTT_DataLoader
 
 FILE_DIR = os.path.dirname(os.path.realpath(__file__))
 REPO_PATH = os.path.join(FILE_DIR, "VT-TWINS")
@@ -18,6 +14,11 @@ REPO_PATH = os.path.join(FILE_DIR, "VT-TWINS")
 WORD2VEC_PATH = "data/word2vec.pth"
 TOKEN_DICT_PATH = "data/dict.npy"
 PRETRAINED_PATH = "checkpoints/pretrained.pth.tar"
+
+# Import from VT-TWINS repo
+sys.path.append(os.path.join(os.path.dirname(__file__), "VT-TWINS"))
+from s3dg import S3D
+from loader.msrvtt_loader import MSRVTT_DataLoader
 
 # Default VLM parameters
 DEFAULT_EMBED_DIM = 512
@@ -40,6 +41,7 @@ class SpoofDataLoader(MSRVTT_DataLoader):
 
 class VTTWINS_SimilarityVLM(SimilarityVLM):
     def __init__(self, reset_cache: bool = False):
+        
         # Create model
         self.model = S3D(word2vec_path=WORD2VEC_PATH, token_to_word_path=TOKEN_DICT_PATH)
         self.model.to(DEVICE)
@@ -51,10 +53,9 @@ class VTTWINS_SimilarityVLM(SimilarityVLM):
         # Location for pretrained weights
         pretrained_path = os.path.join(REPO_PATH, PRETRAINED_PATH)
         
-        # Setup cache
+        # Cache file locations
         cache_index_path = os.path.join(FILE_DIR, CACHE_INDEX_NAME)
         cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
-        os.makedirs(cache_dir_path, exist_ok=True)
         
         super().__init__(pretrained_path, cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
         
@@ -104,7 +105,7 @@ if __name__ == "__main__":
         "setting a table",
         "pouring a drink"
     ]
-    VID_PATH = "D:/datasets/PAC/few_shot_act_reg/smsm_cmn/001.Pouring_something_into_something/3411.webm"
+    VID_PATH = "/home/datasets/kinetics_100/077.blasting_sand/_H6shTwqBK4.mp4"
     
     test.open_video(VID_PATH)
     vid_embed = test.video_encoder(test.open_video(VID_PATH))

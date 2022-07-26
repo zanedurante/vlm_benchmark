@@ -1,9 +1,22 @@
-from SimilarityVLM import SimilarityVLM
-from transformers import CLIPModel, CLIPTokenizer, CLIPProcessor
-from similarity_metrics import Similarity
 import numpy as np
 import decord
 import random
+import os
+
+import torch
+from transformers import CLIPModel, CLIPTokenizer, CLIPProcessor
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+from SimilarityVLM import SimilarityVLM
+from similarity_metrics import Similarity
+
+
+
+# Default cache locations
+FILE_DIR = os.path.dirname(os.path.realpath(__file__))
+CACHE_INDEX_NAME = "cache_index.pickle"
+CACHE_DIR_NAME = "cache_dir"
+
 
 
 class ClipVLM(SimilarityVLM):
@@ -13,8 +26,8 @@ class ClipVLM(SimilarityVLM):
     TODO: Implement the larger version of CLIP since this should get better performance.
     """
 
-    def __init__(self, path="openai/clip-vit-base-patch32", num_frames=1, sample_strat='uniform', cache_file=None,
-                 cache_dir=None, reset_cache=False):
+    def __init__(self, path="openai/clip-vit-base-patch32", num_frames=1, sample_strat='uniform',
+                 reset_cache=False):
         self.model = None
         self.tokenizer = None
         self.processor = None
@@ -22,8 +35,12 @@ class ClipVLM(SimilarityVLM):
         self.sample_strat = sample_strat  # 'rand' or 'uniform'
 
         decord.bridge.set_bridge("torch")  # Video loader
+        
+        # Cache file locations
+        cache_index_path = os.path.join(FILE_DIR, CACHE_INDEX_NAME)
+        cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
 
-        super().__init__(path, cache_file=cache_file, cache_dir=cache_dir, reset_cache=reset_cache)
+        super().__init__(path, cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
 
     def load_model(self, path="openai/clip-vit-base-patch32"):
         """
@@ -34,6 +51,9 @@ class ClipVLM(SimilarityVLM):
         self.model = CLIPModel.from_pretrained(path)
         self.tokenizer = CLIPTokenizer.from_pretrained(path)
         self.processor = CLIPProcessor.from_pretrained(path)
+        
+        self.model.to(DEVICE)
+        
         return
 
     def tokenize(self, text):
@@ -51,7 +71,8 @@ class ClipVLM(SimilarityVLM):
         :param tokens:
         :return:
         """
-        text_features = self.model.get_text_features(**tokens)
+        with torch.no_grad():
+            text_features = self.model.get_text_features(**tokens).cpu().numpy()
         return text_features
 
     def open_video(self, path):
@@ -84,7 +105,9 @@ class ClipVLM(SimilarityVLM):
         :param video:
         :return:
         """
-        video_features = self.model.get_image_features(**video)  # Frame-level video features
+        with torch.no_grad():
+            video_features = self.model.get_image_features(**video)  # Frame-level video features
+            video_features = video_features.cpu().numpy()
         return video_features
 
     def default_similarity_metric(self) -> Similarity:

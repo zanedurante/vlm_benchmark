@@ -1,0 +1,8 @@
+ENV CREATION
+
+conda create --name VLM_CLIP python=3.9 -y
+conda activate VLM_CLIP
+conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch -y
+conda install -c huggingface transformers=4.14.1 -y
+conda install pandas -y
+pip install decord
