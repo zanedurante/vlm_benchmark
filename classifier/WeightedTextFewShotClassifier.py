@@ -17,10 +17,10 @@ class WeightedTextFewShotClassifier(FewShotClassifier):
         metric (Similarity | None):     The similarity metric to use, if None uses vlm default
         text_weight (float):            Relative weight of text embeddings compared to video embeddings when computing class prototypes
     '''
-    def __init__(self, vlm: SimilarityVLM, metric: Optional[Similarity] = None, text_weight: float = 1) -> None:
+    def __init__(self, vlm: SimilarityVLM, metric: Optional[Similarity] = None, text_weight: float = 1.0) -> None:
         super().__init__(vlm=vlm, metric=metric)
         
-        self.text_weight = text_weight
+        self.text_weight = float(text_weight)
         
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
