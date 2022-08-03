@@ -1,3 +1,9 @@
 [submodule "VTTWINS/VT-TWINS"]
 	path = VTTWINS/VT-TWINS
 	url = git@github.com:KoDohwan/VT-TWINS.git
+[submodule "UNIVL/UniVL"]
+	path = UNIVL/UniVL
+	url = git@github.com:microsoft/UniVL.git
+[submodule "UNIVL/VideoFeatureExtractor"]
+	path = UNIVL/VideoFeatureExtractor
+	url = git@github.com:ArrowLuo/VideoFeatureExtractor.git

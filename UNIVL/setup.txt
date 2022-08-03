@@ -1,0 +1,32 @@
+Download Pretrained States, etc
+
+# UniVL
+cd UniVL
+mkdir modules/bert-base-uncased
+cd modules/bert-base-uncased/
+wget https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-vocab.txt
+mv bert-base-uncased-vocab.txt vocab.txt
+wget https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased.tar.gz
+tar -xvf bert-base-uncased.tar.gz
+rm bert-base-uncased.tar.gz
+cd ../..
+mkdir -p ./weight
+wget -P ./weight https://github.com/microsoft/UniVL/releases/download/v0/univl.pretrained.bin
+cd ..
+
+# VideoFeatureExtractor
+cd VideoFeatureExtractor
+mkdir -p model
+cd model
+wget https://www.rocq.inria.fr/cluster-willow/amiech/howto100m/s3d_howto100m.pth
+cd ../..
+
+
+Create Conda Env
+
+conda create -n VLM_UNIVL python=3.6.9 tqdm boto3 requests pandas -y
+conda activate VLM_UNIVL
+pip install torch==1.7.1+cu92 -f https://download.pytorch.org/whl/torch_stable.html
+pip install git+https://github.com/Maluuba/nlg-eval.git@master
+conda install -c conda-forge ffmpeg-python -y
+conda install -c pytorch torchvision -y
