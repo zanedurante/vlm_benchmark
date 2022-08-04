@@ -54,29 +54,22 @@ from modules.tokenization import BertTokenizer
 
 UNIVL_PRETRAINED_PATH = os.path.join(UNIVL_REPO_PATH, "weight/univl.pretrained.bin")
 UNIVL_TASK_CONFIG = SimpleNamespace(
-    num_thread_reader=1,
-    lr=0.0001,
-    epochs=20,
-    batch_size=256,
-    batch_size_val=3500,
-    lr_decay=0.9,
-    n_display=100,
+    # Sets model parameters - Do not change
     video_dim=1024,
-    seed=42,
-    max_words=20,
-    max_frames=100,
-    min_words=0,
-    feature_framerate=1,
-    min_time=5.0,
+    visual_num_hidden_layers=6,
+    
+    # Only affects dataloading/mem-usage (pad to this length, truncate beyond it)
+    max_words=48,
+    max_frames=64,
+    
+    # Required for vestigial loss function init (value will not affect model behavior)
+    batch_size=256,
     margin=0.1,
     hard_negative_rate=0.5,
     negative_weighting=1,
     n_pair=1,
-    
-    #do_lower_case=True,
     n_gpu=1,
-    
-    use_mil=False
+    use_mil=True # This also determined whether embeddings were normalized before similarity measurement (Generally it was True for MILNCE-trained unimodal encoder training)
 )
 
 

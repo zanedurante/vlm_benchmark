@@ -6,3 +6,5 @@ VTTWINS/cache_dir
 VTTWINS/cache_index.pickle
 CLIP/cache_dir
 CLIP/cache_index.pickle
+UNIVL/cache_dir
+UNIVL/cache_index.pickle

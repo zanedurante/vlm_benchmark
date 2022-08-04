@@ -73,7 +73,8 @@ class FewShotTestHandler:
         
         correct_predictions = 0
         total_queries = 0
-        for vid_paths, category_names in tqdm(dataset, leave=False):
+        dataset_iter = tqdm(dataset, leave=False)
+        for vid_paths, category_names in dataset_iter:
             
             query_vid_paths = vid_paths[:, n_support:]
             if n_support > 0:
@@ -84,9 +85,9 @@ class FewShotTestHandler:
             query_predictions = classifier.predict(category_names, support_vid_paths, query_vid_paths)
             
             correct_predictions += np.sum(query_predictions == np.arange(n_way)[:, None])
-            total_queries += n_way * n_query
-        
-        accuracy = correct_predictions / total_queries
+            total_queries += n_way * n_query    
+            accuracy = correct_predictions / total_queries
+            dataset_iter.set_postfix({"accuracy": accuracy})
         
         # Add to test results and save
         self.results = append_test_result(self.results, classifier, dataset_split_path, n_way, n_support, n_query, n_episodes, accuracy)
