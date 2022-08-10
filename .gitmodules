@@ -7,3 +7,6 @@
 [submodule "UNIVL/VideoFeatureExtractor"]
 	path = UNIVL/VideoFeatureExtractor
 	url = git@github.com:ArrowLuo/VideoFeatureExtractor.git
+[submodule "dataset/moma"]
+	path = dataset/moma
+	url = git@github.com:d1ngn1gefe1/momatools.git
