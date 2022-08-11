@@ -13,6 +13,7 @@ FILE_DIR = os.path.dirname(os.path.realpath(__file__))
 MOMA_REPO = os.path.join(FILE_DIR, "moma")
 
 KINETICS_100_DIR = "/home/datasets/kinetics_100"
+SMSM_DIR = "/home/datasets/smsm_cmn"
 MOMA_DIR = "/home/datasets/moma"
 
 class DatasetHandler:
@@ -31,8 +32,15 @@ class DatasetHandler:
         '''
         self.data_dict = {}
         
-        if name == "kinetics_100":
-            cls_folder_names = [f for f in os.listdir(KINETICS_100_DIR) if os.path.isdir(os.path.join(KINETICS_100_DIR, f))]
+        if name in ["kinetics_100", "smsm"]:
+            # Both of these datasets come from the FSL-Video repo, and both use the splits from CMN: https://github.com/ffmpbgrnn/CMN
+            # Both datasets are stored in the same format. One folder for each category (labeled <id>.<description>), containing video files.
+            if name == "kinetics_100":
+                dataset_dir = KINETICS_100_DIR
+            else:
+                dataset_dir = SMSM_DIR
+            
+            cls_folder_names = [f for f in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, f))]
             cls_folder_names.sort()
             
             if split == "train":
@@ -46,9 +54,9 @@ class DatasetHandler:
                 
             for i in class_indices:
                 cls_folder_name = cls_folder_names[i]
-                category_name = cls_folder_name.split(".")[-1].replace("_", " ")
+                category_name = cls_folder_name.split(".")[-1].replace("_", " ").lower()
                 
-                cls_folder_path = os.path.join(KINETICS_100_DIR, cls_folder_name)
+                cls_folder_path = os.path.join(dataset_dir, cls_folder_name)
                 category_video_paths = [
                     os.path.join(cls_folder_path, f) for f in os.listdir(cls_folder_path)
                     if os.path.isfile(os.path.join(cls_folder_path, f)) and f[0] != "."
