@@ -6,6 +6,8 @@ from .dataset_types import SequentialVideoDataset, SequentialCategoryNameDataset
 '''
 Handler which loads the information for all supported datasets, and can
 produce various formats of iterable datasets for testing.
+
+TODO: Remove moma repo as submodule, instead add instructions to clone it (anywhere) and install it into each VLM environment.
 '''
 
 
