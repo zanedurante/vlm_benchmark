@@ -9,12 +9,12 @@ from similarity_metrics import Similarity
 class SimilarityVLM(ABC):
     """
     Abstract Base Class (ABC) for similarity-based VLMs.  In general, these models can take video
-    and language separately as input and embed them in a joint embedding space (like CLIP).  Since they can embed video
-    and language separately.
+    and language separately and embed each modality into a joint text/video embedding space (like CLIP).
     """
 
-    def __init__(self, path, cache_file=None, cache_dir=None, reset_cache=False):
+    def __init__(self, cache_file=None, cache_dir=None, reset_cache=False):
         """
+        Sets up embedding cache, leaves model-specific setup and loading to subclass __init__().
         :param cache_file: File to a cache file for precomputing video embeddings and enabling faster computation.
         :param cache_dir: Directory to store cached embeddings.
         :param reset_cache: Whether to delete (reset) the existing cache.  This should=True when changes to the
@@ -28,7 +28,6 @@ class SimilarityVLM(ABC):
         self.reset_cache = reset_cache
         self.embed_cache = {}  # Initialize self.embed_cache to empty dictionary, maps video path --> tensor path
         self.load_cache()  # Initialize self.embed_cache
-        self.load_model(path)
         
     def params(self) -> dict:
         """
@@ -93,76 +92,37 @@ class SimilarityVLM(ABC):
         :return: Pytorch embedding tensor for the text
         TODO: Cache text embeddings
         """
-        tokens = self.tokenize(text)
-        text_embed = self.text_encoder(tokens)
+        text_embed = self.text_encoder(text)
         return text_embed
 
-    def get_video_embeds(self, path):
+    def get_video_embeds(self, video_path):
         """
         Embeds video one video tensor at a time
         TODO: See if we should change to encode batches of videos
         :param path: Path to the video
         :return:
         """
-        if path in self.embed_cache:
-            return torch.load(os.path.join(self.cache_dir, self.embed_cache[path]))  # Note: May need to add .cuda() or change dtype
+        if video_path in self.embed_cache:
+            return torch.load(os.path.join(self.cache_dir, self.embed_cache[video_path]))  # Note: May need to add .cuda() or change dtype
 
-        video = self.open_video(path)
-        video = self.transform(video)
-        video_embed = self.video_encoder(video)
-        self.cache(path, video_embed)
+        video_embed = self.video_encoder(video_path)
+        self.cache(video_path, video_embed)
 
         return video_embed
 
     @abstractmethod
-    def load_model(self, path):
+    def text_encoder(self, text):
         """
-        Loads the model from the weights specified in `path`
-        :param path:
-        :return:
-        """
-        return
-
-    @abstractmethod
-    def tokenize(self, text):
-        """
-        Tokenizes text via tokenizer (likely variant of huggingface BertTokenizer)
-        :param text:
-        :return: Tokenized text
-        """
-        pass
-
-    @abstractmethod
-    def text_encoder(self, tokens):
-        """
-        Encodes tokenized text into joint text/video embedding space
+        Tokenize and encode text into a joint text/video embedding space
         :param tokens:
         :return:
         """
         pass
 
     @abstractmethod
-    def open_video(self, path):
+    def video_encoder(self, video_path):
         """
-        Opens video and returns basic, non-transformed video tensor
-        :param path:
-        :return:
-        """
-        pass
-
-    @abstractmethod
-    def transform(self, video):
-        """
-        Transforms video using model-specific transforms
-        :param video:
-        :return:
-        """
-        pass
-
-    @abstractmethod
-    def video_encoder(self, video):
-        """
-        Encodes transformed video into joint text/video embedding space
+        Load, transform and encode a video file into a joint text/video embedding space
         :param video:
         :return:
         """

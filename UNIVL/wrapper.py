@@ -102,15 +102,18 @@ class UniVL_SimilarityVLM(SimilarityVLM):
         cache_index_path = os.path.join(FILE_DIR, CACHE_INDEX_NAME)
         cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
         
-        super().__init__(UNIVL_PRETRAINED_PATH, cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
+        super().__init__(cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
+    
+    def text_encoder(self, text):
+        """
+        Tokenize and encode text into a joint text/video embedding space
+        :param tokens:
+        :return:
+        """
+        # Tokenize
+        tokens = self.tokenizer.convert_tokens_to_ids(self.tokenizer.tokenize(text))
         
-    def load_model(self, path):
-        pass
-    
-    def tokenize(self, text):
-        return self.tokenizer.convert_tokens_to_ids(self.tokenizer.tokenize(text))
-    
-    def text_encoder(self, tokens):
+        # Encode
         if len(tokens) > UNIVL_TASK_CONFIG.max_words - 2:
             raise ValueError(f"Token count ({len(tokens)}) is larger than model can input")
         
@@ -133,13 +136,15 @@ class UniVL_SimilarityVLM(SimilarityVLM):
             
         return mean_pooled_text_embed.cpu().numpy()
     
-    def open_video(self, path):
-        return self.video_preprocessor(self.video_loader.load_video(path))
+    def video_encoder(self, video_path):
+        """
+        Load, transform and encode a video file into a joint text/video embedding space
+        :param video:
+        :return:
+        """
+        # Load and Preprocess
+        video = self.video_preprocessor(self.video_loader.load_video(video_path))
         
-    def transform(self, video):
-        return video
-    
-    def video_encoder(self, video):
         # S3D Feature Extraction
         features = torch.zeros(len(video), FEATURE_LENGTH[FEATURE_EXTRACTOR_TYPE], device=DEVICE)
         for i in range(0, len(video), FEATURE_EXTRACTOR_BATCH_SIZE):
@@ -168,4 +173,8 @@ class UniVL_SimilarityVLM(SimilarityVLM):
         return mean_pooled_vid_embed.cpu().numpy()
     
     def default_similarity_metric(self) -> Similarity:
+        """
+        Returns a reference to the default similarity metric used by this VLM
+        :return:
+        """
         return Similarity.DOT

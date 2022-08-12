@@ -38,11 +38,17 @@ class ClipVLM(SimilarityVLM):
 
         decord.bridge.set_bridge("torch")  # Video loader
         
+        # Load model
+        self.model = CLIPModel.from_pretrained(path)
+        self.tokenizer = CLIPTokenizer.from_pretrained(path)
+        self.processor = CLIPProcessor.from_pretrained(path)
+        self.model.to(DEVICE)
+        
         # Cache file locations
         cache_index_path = os.path.join(FILE_DIR, CACHE_INDEX_NAME)
         cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
 
-        super().__init__(path, cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
+        super().__init__(cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
         
     def params(self) -> dict:
         """
@@ -56,73 +62,41 @@ class ClipVLM(SimilarityVLM):
             "num_frames": self.num_frames,
             "sample_strat": self.sample_strat
         }
-
-    def load_model(self, path="openai/clip-vit-base-patch32"):
+    
+    def text_encoder(self, text):
         """
-        Loads the model from the weights specified in `path`
-        :param path:
-        :return:
-        """
-        self.model = CLIPModel.from_pretrained(path)
-        self.tokenizer = CLIPTokenizer.from_pretrained(path)
-        self.processor = CLIPProcessor.from_pretrained(path)
-        
-        self.model.to(DEVICE)
-        
-        return
-
-    def tokenize(self, text):
-        """
-        Tokenizes text via tokenizer (likely variant of huggingface BertTokenizer)
-        :param text:, list of text to tokenize
-        :return: Tokenized text
-        """
-        inputs = self.tokenizer(text, padding=True, return_tensors="pt")
-        return inputs
-
-    def text_encoder(self, tokens):
-        """
-        Encodes tokenized text into joint text/video embedding space
+        Tokenize and encode text into a joint text/video embedding space
         :param tokens:
         :return:
         """
+        tokens = self.tokenizer(text, padding=True, return_tensors="pt")
         with torch.no_grad():
-            text_features = self.model.get_text_features(**tokens).cpu().numpy()
+            text_features = self.model.get_text_features(**tokens).cpu().numpy()[0]
         return text_features
 
-    def open_video(self, path):
+    def video_encoder(self, video_path):
         """
-        Opens video and returns basic, non-transformed video tensor
-        :param path:
+        Load, transform and encode a video file into a joint text/video embedding space
+        :param video:
         :return:
         """
+        # Load
         # TODO: Figure out best way to subsample the video with CLIP (in the paper they just use one single frame)
-        video_reader = decord.VideoReader(path, num_threads=1)
+        video_reader = decord.VideoReader(video_path, num_threads=1)
         vlen = len(video_reader)
         frame_idxs = self.get_frame_idxs(vlen)
         frames = video_reader.get_batch(frame_idxs)
         frames = frames.float() / 255
         frames = frames.permute(0, 3, 1, 2).squeeze()  # Get rid of single frame dimension
-        return frames
-
-    def transform(self, video):
-        """
-        Transforms video using model-specific transforms
-        :param video:
-        :return:
-        """
-        inputs = self.processor(images=video, return_tensors="pt")
-        return inputs
-
-    def video_encoder(self, video):
-        """
-        Encodes transformed video into joint text/video embedding space
-        :param video:
-        :return:
-        """
+        
+        # Preprocess
+        inputs = self.processor(images=frames, return_tensors="pt")
+        
+        # Encode
         with torch.no_grad():
-            video_features = self.model.get_image_features(**video)  # Frame-level video features
-            video_features = video_features.cpu().numpy()
+            video_features = self.model.get_image_features(**inputs)  # Frame-level video features
+            video_features = video_features.cpu().numpy()[0]
+
         return video_features
 
     def default_similarity_metric(self) -> Similarity:

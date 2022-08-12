@@ -50,67 +50,56 @@ class VTTWINS_SimilarityVLM(SimilarityVLM):
         # Create spoof object to run dataloader video loading methods against
         self.spoof_dataloader = SpoofDataLoader()
         
-        # Location for pretrained weights
+        # Load model
         pretrained_path = os.path.join(REPO_PATH, PRETRAINED_PATH)
+        checkpoint = torch.load(pretrained_path, map_location="cpu")
+        checkpoint_module = {k[7:]: v for k, v in checkpoint.items()}
+        self.model.load_state_dict(checkpoint_module)
         
         # Cache file locations
         cache_index_path = os.path.join(FILE_DIR, CACHE_INDEX_NAME)
         cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
         
-        super().__init__(pretrained_path, cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
-        
-    def load_model(self, path):
-        checkpoint = torch.load(path, map_location="cpu")
-        checkpoint_module = {k[7:]: v for k, v in checkpoint.items()}
-        self.model.load_state_dict(checkpoint_module)
-        
-    def tokenize(self, text):
-        return self.spoof_dataloader.words_to_ids(text)
+        super().__init__(cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
     
-    def text_encoder(self, tokens):
+    def text_encoder(self, text):
+        """
+        Tokenize and encode text into a joint text/video embedding space
+        :param tokens:
+        :return:
+        """
+        # Tokenize
+        tokens = self.spoof_dataloader.words_to_ids(text)
+        
+        # Encode
         with torch.no_grad():
             tokens = tokens.unsqueeze(0).to(DEVICE)
-            return self.model.text_module(tokens).cpu().numpy()[0]
+            embedding = self.model.text_module(tokens).cpu().numpy()[0]
+
+        return embedding
     
-    # Loads a single video into multiple clips which will be individually encoded and averaged
-    def open_video(self, path):
-        duration = self.spoof_dataloader._get_duration(path)
-        video = self.spoof_dataloader._get_video(path, 0, float(duration), self.spoof_dataloader.num_clip)
+    def video_encoder(self, video_path):
+        """
+        Load, transform and encode a video file into a joint text/video embedding space
+        :param video:
+        :return:
+        """
+        # Load and Preprocess
+        # Loads a single video into multiple clips which will be individually encoded and averaged
+        duration = self.spoof_dataloader._get_duration(video_path)
+        video = self.spoof_dataloader._get_video(video_path, 0, float(duration), self.spoof_dataloader.num_clip)
         video /= 255
-        return video
-    
-    def transform(self, video):
-        return video
-    
-    def video_encoder(self, video):
+        
+        # Encode
         with torch.no_grad():
             video = video.float().to(DEVICE)
-            return self.model.forward_video(video).mean(dim=0).cpu().numpy()
+            embedding = self.model.forward_video(video).mean(dim=0).cpu().numpy()
+        
+        return embedding
     
     def default_similarity_metric(self) -> Similarity:
+        """
+        Returns a reference to the default similarity metric used by this VLM
+        :return:
+        """
         return Similarity.DOT
-    
-    
-    
-    
-    
-    
-    
-if __name__ == "__main__":
-    test = VTTWINS_SimilarityVLM()
-    
-    TEXT_LIST = [
-        "eating pasta",
-        "murder",
-        "setting a table",
-        "pouring a drink"
-    ]
-    VID_PATH = "/home/datasets/kinetics_100/077.blasting_sand/_H6shTwqBK4.mp4"
-    
-    test.open_video(VID_PATH)
-    vid_embed = test.video_encoder(test.open_video(VID_PATH))
-    
-    for text in TEXT_LIST:
-        test.tokenize(text)
-        text_embed = test.text_encoder(test.tokenize(text))
-        print(f"{text}: {test.get_similarity(text_embed, vid_embed)}")
