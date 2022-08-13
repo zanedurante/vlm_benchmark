@@ -28,13 +28,22 @@ class FewShotTestHandler:
             self.results = pd.DataFrame()
             
     def fill_cache(self, vlm: SimilarityVLM, dataset: DatasetHandler) -> None:
-        """Triggers the given vlm to generate embeddings for every video referenced
+        """Triggers the given vlm to generate embeddings for every video and text referenced
         in the given dataset split, saving the resulting cache.
 
         Args:
             vlm (SimilarityVLM): VLM to fill the cache of
-            dataset_split_path (str): Dataset from which to select videos
+            dataset (DatasetHandler): Dataset Handler from which to select videos and text
         """
+        
+        text_dataset = dataset.sequential_category_name()
+        for i, text in enumerate(tqdm(text_dataset)):
+            if text not in vlm.embed_cache:
+                vlm.get_text_embeds(text)
+            
+            # Save cache periodically in case process is interrupted
+            if i % 25:
+                vlm.save_cache()
         
         video_dataset = dataset.sequential_video()
         for i, vid_path in enumerate(tqdm(video_dataset)):
@@ -57,7 +66,7 @@ class FewShotTestHandler:
 
         Args:
             classifier (FewShotClassifier): Few-Shot video classifier built on top of an arbitrary SimilarityVLM
-            dataset_split_path (str): Dataset split to build few-shot tasks from
+            dataset (DatasetHandler): Dataset Handler to build few-shot tasks from
             n_way (int): Number of categories per few-shot task
             n_support (int): Number of example videos per category per few-shot task
             n_query (int, optional): Number of videos predicted per category per few-shot task

@@ -15,7 +15,7 @@ class SimilarityVLM(ABC):
     def __init__(self, cache_file=None, cache_dir=None, reset_cache=False):
         """
         Sets up embedding cache, leaves model-specific setup and loading to subclass __init__().
-        :param cache_file: File to a cache file for precomputing video embeddings and enabling faster computation.
+        :param cache_file: File to a cache file for precomputing video/text embeddings and enabling faster computation.
         :param cache_dir: Directory to store cached embeddings.
         :param reset_cache: Whether to delete (reset) the existing cache.  This should=True when changes to the
                 model or data loading have been made and the video embeddings need to be recomputed.
@@ -26,7 +26,7 @@ class SimilarityVLM(ABC):
         self.cache_file = cache_file
         self.cache_dir = cache_dir
         self.reset_cache = reset_cache
-        self.embed_cache = {}  # Initialize self.embed_cache to empty dictionary, maps video path --> tensor path
+        self.embed_cache = {}  # Initialize self.embed_cache to empty dictionary, maps video-path or text --> tensor path
         self.load_cache()  # Initialize self.embed_cache
         
     def params(self) -> dict:
@@ -73,7 +73,7 @@ class SimilarityVLM(ABC):
             with open(self.cache_file, "wb") as cf:
                 pickle.dump(self.embed_cache, cf)
 
-    def cache(self, path, video_embed):
+    def cache_video(self, path, video_embed):
         """
         Caches video embedding
         :param path: Path to video file
@@ -84,15 +84,31 @@ class SimilarityVLM(ABC):
             embed_filename = path.strip("/").replace("/", ".")
             torch.save(video_embed, os.path.join(self.cache_dir, embed_filename))
             self.embed_cache[path] = embed_filename
+            
+    def cache_text(self, text, text_embed):
+        """
+        Caches text embedding
+        :param text: Input text (lower case)
+        :param text_embed: Embedding created by Similarity VLM
+        :return:
+        """
+        if self.use_cache:
+            embed_filename = text.replace(" ", "_")
+            torch.save(text_embed, os.path.join(self.cache_dir, embed_filename))
+            self.embed_cache[text] = embed_filename
 
     def get_text_embeds(self, text):
         """
         Embeds text one string at a time
         :param text: List of strings to embed
         :return: Pytorch embedding tensor for the text
-        TODO: Cache text embeddings
         """
+        if text in self.embed_cache:
+            return torch.load(os.path.join(self.cache_dir, self.embed_cache[text]))
+        
         text_embed = self.text_encoder(text)
+        self.cache_text(text, text_embed)
+        
         return text_embed
 
     def get_video_embeds(self, video_path):
@@ -106,7 +122,7 @@ class SimilarityVLM(ABC):
             return torch.load(os.path.join(self.cache_dir, self.embed_cache[video_path]))  # Note: May need to add .cuda() or change dtype
 
         video_embed = self.video_encoder(video_path)
-        self.cache(video_path, video_embed)
+        self.cache_video(video_path, video_embed)
 
         return video_embed
 
