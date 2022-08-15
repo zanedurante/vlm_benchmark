@@ -10,3 +10,6 @@
 [submodule "dataset/moma"]
 	path = dataset/moma
 	url = git@github.com:d1ngn1gefe1/momatools.git
+[submodule "MILES/MCQ"]
+	path = MILES/MCQ
+	url = git@github.com:TencentARC/MCQ.git
