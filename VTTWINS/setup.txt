@@ -5,6 +5,11 @@ conda activate VLM_VTTWINS
 conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch -y
 conda install -c conda-forge ffmpeg-python pandas numpy tqdm scikit-learn numba=0.53.1 -y
 
+# For running jupyter notebooks
+conda install ipykernel ipywidgets -y
+
+# TODO: Dataset-related dependences (MOMA)
+
 
 
 FILE DOWNLOADS

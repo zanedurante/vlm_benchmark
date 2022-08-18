@@ -30,3 +30,11 @@ pip install torch==1.7.1+cu92 -f https://download.pytorch.org/whl/torch_stable.h
 pip install git+https://github.com/Maluuba/nlg-eval.git@master
 conda install -c conda-forge ffmpeg-python -y
 conda install -c pytorch torchvision -y
+
+# Testing Dependences
+pip install pandas tqdm
+
+# For running jupyter notebooks
+conda install ipykernel ipywidgets -y
+
+# TODO: Dataset-related dependences (MOMA)

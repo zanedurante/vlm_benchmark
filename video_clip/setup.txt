@@ -40,4 +40,9 @@ cd runs/retri/videoclip
 wget https://dl.fbaipublicfiles.com/MMPT/retri/videoclip/checkpoint_best.pt
 
 # For compatibility with testing + data loading
-pip install pytube decord
+pip install pytube decord pandas tqdm
+
+# For running jupyter notebooks
+conda install ipykernel ipywidgets -y
+
+# TODO: Dataset-related dependences (MOMA)

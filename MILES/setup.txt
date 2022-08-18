@@ -21,3 +21,10 @@ pip install neptune-contrib
 pip install opencv-python
 pip install ftfy
 
+# Testing Dependences
+pip install pandas tqdm
+
+# For running jupyter notebooks
+conda install ipykernel ipywidgets -y
+
+# TODO: Dataset-related dependences (MOMA)
