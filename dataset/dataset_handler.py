@@ -102,6 +102,25 @@ class DatasetHandler:
     def video_count(self) -> int:
         return sum(len(vids) for vids in self.data_dict.values())
     
+    def valid_for_few_shot(self, n_way: int, n_support: int, n_query: int) -> bool:
+        """Check whether the dataset has enough categories with enough examples to successfully sample
+        few-shot tasks with the given parameters.
+
+        Args:
+            n_way (int): _description_
+            n_support (int): _description_
+            n_query (int): _description_
+
+        Returns:
+            bool: _description_
+        """
+        valid_category_count = sum(
+            len(videos) >= n_support + n_query
+            for videos in self.data_dict.values()
+        )
+        return valid_category_count >= n_way
+    
+    
     def sequential_video(self) -> SequentialVideoDataset:
         return SequentialVideoDataset(self.data_dict)
     

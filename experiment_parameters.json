@@ -1,0 +1,9 @@
+{
+    "dataset_name": ["kinetics_100", "moma_sact"],
+    "dataset_split": ["val", "all"],
+    "n_way": [5, 10, 20, 30, 50, 100],
+    "n_support": [0, 1, 2, 3, 5, 10, 20],
+    "n_query": 1,
+    "n_episodes": 1000,
+    "text_weight": [0, 0.1, 0.2, 0.5, 1, 2, 3, 5, 7.5, 10, 20, 100]
+}

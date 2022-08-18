@@ -2,7 +2,7 @@ import os
 from typing import Optional
 import numpy as np
 import pandas as pd
-from tqdm.notebook import tqdm
+from tqdm.autonotebook import tqdm
 import json
 
 from SimilarityVLM import SimilarityVLM
@@ -37,7 +37,7 @@ class FewShotTestHandler:
         """
         
         text_dataset = dataset.sequential_category_name()
-        for i, text in enumerate(tqdm(text_dataset)):
+        for i, text in enumerate(tqdm(text_dataset, leave=False)):
             if text not in vlm.embed_cache:
                 vlm.get_text_embeds(text)
             
@@ -46,7 +46,7 @@ class FewShotTestHandler:
                 vlm.save_cache()
         
         video_dataset = dataset.sequential_video()
-        for i, vid_path in enumerate(tqdm(video_dataset)):
+        for i, vid_path in enumerate(tqdm(video_dataset, leave=False)):
             if vid_path not in vlm.embed_cache:
                 vlm.get_video_embeds(vid_path)
                 
