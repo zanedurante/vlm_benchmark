@@ -29,6 +29,7 @@ mkdir pretrained_models
 cd pretrained_models
 wget https://www.rocq.inria.fr/cluster-willow/amiech/howto100m/s3d_howto100m.pth
 wget https://www.rocq.inria.fr/cluster-willow/amiech/howto100m/s3d_dict.npy
+cd ..
 
 # Dry run to get config files
 python locallaunch.py projects/retri/videoclip.yaml --dryrun

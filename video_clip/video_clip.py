@@ -31,29 +31,30 @@ class VideoClipVLM(SimilarityVLM):
     TODO: Implement the larger version of CLIP since this should get better performance.
     """
     def __init__(self, path="video_clip/MMPT_updated/projects/retri/videoclip/how2.yaml", num_seconds=2,
-                 use_cuda=False, cache_file=None, cache_dir=None, reset_cache=False):
+                 use_cuda=False, reset_cache=False):
 
         """
         :param path: Path to the videoclip config file (see setup.txt)
         :param num_seconds: Number of seconds to use in the video during inference, converts to 30fps
-        :param use_cuda: Whether to use cuda for GPU, if false uses CPU
+        :param use_cuda: Whether to use cuda for GPU (if available), if false uses CPU
         :param reset_cache: Whether to reset the embedding cache
         """
 
-        super().__init__(cache_file=cache_file, cache_dir=cache_dir, reset_cache=reset_cache)
-
-
         self.model = None
-        self.cuda = use_cuda
+        self.cuda = use_cuda and DEVICE == "cuda"
         self.path = path  # Pretrained video clip identifier
         self.num_seconds = num_seconds
         self.transforms = self.get_transforms()
 
         decord.bridge.set_bridge("torch")  # Video loader
+        
+        # Load model
+        self.load_model(path=self.path)
 
         # Cache file locations
         cache_index_path = os.path.join(FILE_DIR, CACHE_INDEX_NAME)
         cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
+        super().__init__(cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
 
 
     def params(self) -> dict:
@@ -65,7 +66,7 @@ class VideoClipVLM(SimilarityVLM):
         """
         return {
             "path": self.path,
-            "num_seconds": self.num_frames,
+            "num_seconds": self.num_seconds,
         }
 
     def load_model(self, path="video_clip/MMPT_updated/projects/retri/videoclip/how2.yaml"):
@@ -113,7 +114,7 @@ class VideoClipVLM(SimilarityVLM):
         :return:
         """
 
-        tokens = self.tokenize(text)
+        text_tokens, text_mask = self.tokenize([text])[0]
 
 
         # Note: We have to generate random video frames since VideoCLIP requires video and text input
@@ -123,12 +124,10 @@ class VideoClipVLM(SimilarityVLM):
         random_video = np.zeros((1, 1, 30, 224, 224, 3))
         video_frames = torch.from_numpy(random_video).float()
 
-        text_features = []
-        for inp in tokens:
-            with torch.no_grad():
-                output = self.model.mmpt_model(video_frames, inp[0], inp[1], return_score=False)
-                text_features.append(output["pooled_text"].numpy().squeeze())
-        return np.asarray(text_features)
+        with torch.no_grad():
+            output = self.model.mmpt_model(video_frames, text_tokens, text_mask, return_score=False)
+            text_features = output["pooled_text"].numpy().squeeze()
+        return text_features
 
     def open_video(self, path):
         """
@@ -179,7 +178,7 @@ class VideoClipVLM(SimilarityVLM):
 
         with torch.no_grad():
             video_features = self.model.forward(video)
-            video_features = video_features.cpu().numpy()
+            video_features = video_features.cpu().numpy()[0]
         return video_features
 
     def default_similarity_metric(self) -> Similarity:

@@ -16,7 +16,7 @@ class VideoCLIPSimpleTest(unittest.TestCase):
         # Instantiate VideoCLIP
         vlm = VideoClipVLM()
         vlm.load_model()
-        text_embeds = vlm.get_text_embeds(VIDEO_LABELS)
+        text_embeds = np.asarray([vlm.get_text_embeds(label) for label in VIDEO_LABELS])
         video_paths = [os.path.join(VIDEO_DIR_PATH, lab+".mp4") for lab in VIDEO_LABELS]
         video_embeds = []
         for path in video_paths:
