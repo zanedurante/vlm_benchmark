@@ -136,23 +136,23 @@ class VideoClipVLM(SimilarityVLM):
         :return:
         """
         video_reader = decord.VideoReader(path, num_threads=1)
-        fps = video_reader.get_avg_fps()
-        video_length = len(video_reader)
-
-        # TODO: Sample video to have 30 FPS instead of current approach (assumes 30FPS)
-        # Changing to this will likely have better performance
-        # Also allows for videos with < 30 frames to be used as input
-        num_frames = math.ceil(fps * self.num_seconds)
-
-        if video_length < 30:
-            raise RuntimeError("VideoCLIP requires video to have at least 30 frames")
-        if video_length < num_frames:
-            num_frames = (video_length // 30) * 30 # Input needs to be in multiples of 30 frames
-
-        start_frame = video_length // 2 - num_frames // 2
-        end_frame = start_frame + num_frames
-
-        video_tensor = video_reader.get_batch(range(start_frame, end_frame))#.unsqueeze(0)
+        native_fps = video_reader.get_avg_fps()
+        total_framecount_native = len(video_reader)
+        
+        # The model is given a central window of consecutive frames, assumed to be at 30 FPS
+        # Calculate size of desired window in number of frames for both native fps and desired 30 fps
+        focused_framecount_native = math.ceil(native_fps * self.num_seconds)
+        focused_framecount_desired = 30 * math.ceil(self.num_seconds) # Ensure input has multiple of 30 frames
+        
+        # Calculate start/end frame indices to sample in native fps
+        focus_start_native = max(total_framecount_native // 2 - focused_framecount_native // 2, 0)
+        focus_end_native = min(focus_start_native + focused_framecount_native, total_framecount_native)
+        
+        # Convert native frame indices to desired framerate
+        # NOTE: This will excessively stretch out any videos which are shorter than self.num_seconds, which may be undesired
+        focus_frame_indices_desired = np.minimum(np.round(np.linspace(focus_start_native, focus_end_native, focused_framecount_desired, endpoint=False)), total_framecount_native - 1)
+        
+        video_tensor = video_reader.get_batch(focus_frame_indices_desired)
         return video_tensor
 
     def transform(self, video):

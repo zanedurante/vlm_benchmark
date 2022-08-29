@@ -28,6 +28,10 @@ def get_vlm(vlm_name: str) -> SimilarityVLM:
         from MILES.wrapper import MILES_SimilarityVLM
         return MILES_SimilarityVLM(reset_cache=False)
     
+    if vlm_name == "VideoCLIP":
+        from video_clip.video_clip import VideoClipVLM
+        return VideoClipVLM(reset_cache=False)
+    
     raise ValueError(f"Unrecognized VLM name: {vlm_name}")
 
 def get_param_iterator(param_json_file: str) -> list:
