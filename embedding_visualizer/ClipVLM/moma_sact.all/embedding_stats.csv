@@ -1,0 +1,92 @@
+,vid-vid mean similarity,text-vid mean similarity
+one person is on their knees while proposing,0.5565656,0.27223518
+one person is putting a ring on their partner,0.58168155,0.2599037
+players are trying to catch a frisbee,0.7377126,0.26749632
+the adult is chasing after the child on the bike,0.68843204,0.29383254
+the adult is comforting the child,0.6441418,0.2439794
+the adult is explaining to the child how to ride a bike,0.66529316,0.28879923
+the adult is feeding the child,0.7013783,0.25432923
+the adult is holding the child on the bike,0.6848876,0.29155394
+the adult is playing with the child,0.61018014,0.25306857
+the adult is pushing the stroller,0.63162196,0.26555133
+the adult is wrapping the child or changing the child's diaper or clothes,0.7077233,0.27314562
+the audience and host are cheering the award recipient on stage,0.6638755,0.27603686
+the award winner is delivering a speech on stage,0.6459464,0.27559307
+the barber is applying shampoo,0.71799314,0.27349883
+the barber is combing hair,0.7188381,0.2751465
+the barber is cutting hair with a razor,0.72739655,0.29352593
+the barber is cutting hair with scissors,0.73115224,0.28744596
+the barber is drying hair,0.704762,0.2683231
+the barber is massaging the customer's face or applying products,0.6857809,0.28650403
+the barber is shaving a beard with a razor,0.7055667,0.30220926
+the barber is shaving a beard with scissors,0.73003906,0.30476034
+the barber is washing the customer's hair,0.72193664,0.27968922
+the basketball player is dribbling or shooting a basket,0.7481423,0.25155208
+the basketball player is shooting a free throw,0.7517831,0.27433056
+the basketball players are in a timeout,0.6695089,0.24125026
+the caregiver is helping the patient into a seat or a bed,0.74559325,0.29308754
+the caregiver is helping the patient out of the bed or chair,0.65051997,0.2687536
+the caregiver is helping the patient walk down the stairs,0.64044416,0.28562418
+the child falls off the bike,0.66217685,0.26150095
+the customers are raising their glasses,0.59673786,0.22273825
+the driver is being asked to look in a specific direction,0.68157554,0.23904286
+the driver is ordering food through a speaker,0.6737605,0.27431962
+the driver is paying for food,0.7454587,0.27647534
+the driver is receiving food and drink,0.70658684,0.2635728
+the driver is speaking with the police officer,0.62851226,0.2628553
+the driver is talking to people outside the car,0.7124234,0.26430264
+the firefighters are doing other work,0.6817122,0.26599947
+the firefighters are exiting the firetruck towards the scene,0.6706832,0.26776078
+the firefighters are extinguishing fire,0.69967717,0.26751846
+the firefighters are talking,0.6150075,0.25919285
+the goalkeeper is saving a shot,0.74315447,0.2717817
+the guests are departing from the front desk,0.6458556,0.2537139
+the guests are walking to the front desk,0.6614655,0.24256046
+the health worker is injecting the patient with the syringe,0.6734633,0.27882403
+the health worker is preparing equipment for the injection,0.629533,0.23322798
+the health worker is stopping the patient's bleeding,0.6580147,0.24820347
+the health worker is talking to the patient,0.6356301,0.2565842
+the health worker is using an alcohol swab on the patient's skin before the injection,0.6595729,0.27511364
+the host is giving the award winner an award,0.6679692,0.28398052
+the host is introducing the award winner,0.60984206,0.2456553
+the massage therapist is applying nail polish to the customer's nails,0.7567787,0.26544377
+the massage therapist is cleaning the customer's nails,0.7530201,0.25002187
+the massage therapist is cutting the customer's nails,0.73987806,0.25066164
+the massage therapist is filing the customer's nails,0.7419555,0.23800404
+the massage therapist is massaging or applying oils or creams to the customer's hands or feet,0.74375385,0.2815562
+the passengers are placing their bags on the security inspection belt,0.68630093,0.26763195
+the passengers are walking through the security gate,0.5854039,0.26175353
+the patient is walking with physical therapy parallel bars,0.6628031,0.29503658
+the person is being asked to blow into an alcohol tester,0.6524867,0.26794058
+the person is being asked to stand on one leg by the police,0.6959636,0.26062167
+the person is being asked to walk straight by the police,0.6767379,0.27151492
+the player is throwing a frisbee,0.75717,0.27171594
+the players are passing the basketball,0.7477848,0.27063927
+the players are passing the soccer ball,0.7519887,0.26115283
+the receptionist is exchanging items with the guests,0.6411688,0.27947322
+the receptionist is talking to guests,0.6129168,0.26485324
+the repairmen are fixing the car's tires,0.67032737,0.24732023
+the repairmen are leaving while the car is departing,0.66673356,0.22763424
+the repairmen are watching the car driving towards the repair station,0.6697583,0.21948093
+the security officer is inspecting a bag,0.6938111,0.25605604
+the security officer is inspecting a passenger,0.6050748,0.244518
+the soccer player is dribbling towards the goal,0.7149794,0.26010594
+the soccer players are celebrating,0.6492044,0.26152423
+the student is playing the piano while the teacher watches,0.7570066,0.3050379
+the table tennis player is hitting the ball into the net which ends the point,0.8085404,0.34148824
+the table tennis player is serving the ball,0.79257834,0.32271615
+the table tennis players are not playing the game right now,0.68523043,0.30064297
+the table tennis players are rallying with each other,0.7643113,0.32845378
+the teacher and student are playing the piano together,0.73212814,0.2926861
+the teacher is playing the piano,0.7160038,0.28559235
+the teacher is verbally instructing the student,0.7022233,0.25203174
+the tennis table player is failing to return the ball,0.8014578,0.29092398
+the waiter is cleaning the table,0.63937074,0.27862406
+the waiter is is talking to the customer or helping them into their seat,0.6191335,0.2701221
+the waiter is placing utensils on the table,0.69132483,0.27516165
+the waiters are placing food on the table,0.668499,0.28309628
+the waiters are pouring or presenting drinks for the customers,0.6490989,0.27764612
+the waiters are taking orders from the customers,0.62037367,0.26074675
+two people are hugging,0.59078896,0.26963273
+two people are kissing,0.61271393,0.26344532
+two people are talking,0.5421096,0.22828957
