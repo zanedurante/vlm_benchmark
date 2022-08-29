@@ -2,9 +2,14 @@ from abc import ABC, abstractmethod
 import torch
 import pickle
 import os
+from functools import lru_cache
 
 from similarity_metrics import Similarity
 
+# Reduce I/O load from repeatedly reading the disk-cached embeddings on the same vlm instance
+# NOTE: Using @lru_cache as a decorator has the side effect that the SimilarityVLM instance won't be garbage collected
+# (If this becomes a problem, you can use self.func = lru_cache(self._func, maxsize=...) instead)
+MEM_CACHE_SIZE = 2**14
 
 class SimilarityVLM(ABC):
     """
@@ -97,6 +102,7 @@ class SimilarityVLM(ABC):
             torch.save(text_embed, os.path.join(self.cache_dir, embed_filename))
             self.embed_cache[text] = embed_filename
 
+    @lru_cache(maxsize=MEM_CACHE_SIZE)
     def get_text_embeds(self, text):
         """
         Embeds text one string at a time
@@ -111,6 +117,7 @@ class SimilarityVLM(ABC):
         
         return text_embed
 
+    @lru_cache(maxsize=MEM_CACHE_SIZE)
     def get_video_embeds(self, video_path):
         """
         Embeds video one video tensor at a time

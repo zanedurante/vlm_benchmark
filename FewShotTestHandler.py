@@ -20,10 +20,12 @@ TEST_RESULTS_PATH = os.path.join(FILE_DIR, "test_results.csv")
 
 
 class FewShotTestHandler:
-    def __init__(self):
+    def __init__(self, test_results_path: Optional[str] = TEST_RESULTS_PATH):
+        self.test_results_path = test_results_path
+        
         # Load results DataFrame
-        if os.path.exists(TEST_RESULTS_PATH):
-            self.results = pd.read_csv(TEST_RESULTS_PATH)
+        if test_results_path is not None and os.path.exists(test_results_path):
+            self.results = pd.read_csv(test_results_path)
         else:
             self.results = pd.DataFrame()
             
@@ -35,24 +37,33 @@ class FewShotTestHandler:
             vlm (SimilarityVLM): VLM to fill the cache of
             dataset (DatasetHandler): Dataset Handler from which to select videos and text
         """
-        
-        text_dataset = dataset.sequential_category_name()
-        for i, text in enumerate(tqdm(text_dataset, leave=False)):
-            if text not in vlm.embed_cache:
-                vlm.get_text_embeds(text)
-            
-            # Save cache periodically in case process is interrupted
-            if i % 25:
-                vlm.save_cache()
+        new_entries = 0
         
         video_dataset = dataset.sequential_video()
         for i, vid_path in enumerate(tqdm(video_dataset, leave=False)):
             if vid_path not in vlm.embed_cache:
-                vlm.get_video_embeds(vid_path)
+                new_entries += 1
+                
+            # Even if cached on disk already, call this to cache in mem
+            vlm.get_video_embeds(vid_path)
                 
             # Save cache periodically in case process is interrupted
-            if i % 25:
+            if new_entries >= 25:
                 vlm.save_cache()
+                new_entries = 0
+                
+        text_dataset = dataset.sequential_category_name()
+        for i, text in enumerate(tqdm(text_dataset, leave=False)):
+            if text not in vlm.embed_cache:
+                new_entries += 1
+            
+            # Even if cached on disk already, call this to cache in mem
+            vlm.get_text_embeds(text)
+            
+            # Save cache periodically in case process is interrupted
+            if new_entries >= 25:
+                vlm.save_cache()
+                new_entries = 0
                 
         vlm.save_cache()
         
@@ -100,7 +111,8 @@ class FewShotTestHandler:
         
         # Add to test results and save
         self.results = append_test_result(self.results, classifier, dataset, n_way, n_support, n_query, n_episodes, accuracy)
-        self.results.to_csv(TEST_RESULTS_PATH, index=False)
+        if self.test_results_path is not None:
+            self.results.to_csv(self.test_results_path, index=False)
         
     
     
@@ -179,7 +191,13 @@ def extract_test_result_sequence(results: pd.DataFrame,
                                  filter: dict = {}) -> pd.DataFrame:
     
     filtered_indices = np.ones(len(results)).astype(bool)
-    for filter_col, filter_val in filter.items():
-        filtered_indices = filtered_indices & (results[filter_col] == filter_val)
+    for filter_col, filter_val_list in filter.items():
+        if filter_col not in results.columns:
+            continue
+        
+        valid_col_indices = np.zeros(len(results)).astype(bool)
+        for filter_val in filter_val_list:
+            valid_col_indices = valid_col_indices | (results[filter_col] == filter_val)
+        filtered_indices = filtered_indices & valid_col_indices
     
     return results[filtered_indices].sort_values(x_column).groupby([col for col in results if col not in [x_column, y_column]], as_index=False, dropna=False).agg(list)
