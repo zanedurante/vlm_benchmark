@@ -1,6 +1,9 @@
 # Python compiled files
 __pycache__/
 
+# VS-Code Stuff
+*.code-workspace
+
 # Downloaded checkpoints
 MILES/pretrained/
 
