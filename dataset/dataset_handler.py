@@ -68,9 +68,9 @@ class DatasetHandler:
         
         elif name == "moma_act":
             sys.path.append(MOMA_REPO)
-            from momaapi.moma import MOMA
+            from .moma.momaapi.moma import MOMA
             
-            moma = MOMA(MOMA_DIR)
+            moma = MOMA(MOMA_DIR, paradigm="few-shot")
             cids = moma.get_cids(kind="act", threshold=1, split=split)
             category_names = moma.get_cnames(cids_act=cids)
             for category_name in category_names:
@@ -80,9 +80,9 @@ class DatasetHandler:
         
         elif name == "moma_sact":
             sys.path.append(MOMA_REPO)
-            from momaapi.moma import MOMA
+            from .moma.momaapi.moma import MOMA
             
-            moma = MOMA(MOMA_DIR)
+            moma = MOMA(MOMA_DIR, paradigm="few-shot")
             cids = moma.get_cids(kind="sact", threshold=1, split=split)
             category_names = moma.get_cnames(cids_sact=cids)
             for category_name in category_names:
