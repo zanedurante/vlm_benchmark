@@ -37,35 +37,14 @@ class FewShotTestHandler:
             vlm (SimilarityVLM): VLM to fill the cache of
             dataset (DatasetHandler): Dataset Handler from which to select videos and text
         """
-        new_entries = 0
         
         video_dataset = dataset.sequential_video()
         for i, vid_path in enumerate(tqdm(video_dataset, leave=False)):
-            if vid_path not in vlm.embed_cache:
-                new_entries += 1
-                
-            # Even if cached on disk already, call this to cache in mem
             vlm.get_video_embeds(vid_path)
-                
-            # Save cache periodically in case process is interrupted
-            if new_entries >= 25:
-                vlm.save_cache()
-                new_entries = 0
                 
         text_dataset = dataset.sequential_category_name()
         for i, text in enumerate(tqdm(text_dataset, leave=False)):
-            if text not in vlm.embed_cache:
-                new_entries += 1
-            
-            # Even if cached on disk already, call this to cache in mem
             vlm.get_text_embeds(text)
-            
-            # Save cache periodically in case process is interrupted
-            if new_entries >= 25:
-                vlm.save_cache()
-                new_entries = 0
-                
-        vlm.save_cache()
         
     
         

@@ -1,7 +1,10 @@
 from abc import ABC, abstractmethod
+from typing import Optional
 import torch
 import pickle
 import os
+import json
+import shelve
 from functools import lru_cache
 
 from similarity_metrics import Similarity
@@ -17,7 +20,7 @@ class SimilarityVLM(ABC):
     and language separately and embed each modality into a joint text/video embedding space (like CLIP).
     """
 
-    def __init__(self, cache_file=None, cache_dir=None, reset_cache=False):
+    def __init__(self, cache_file=None, reset_cache=False):
         """
         Sets up embedding cache, leaves model-specific setup and loading to subclass __init__().
         :param cache_file: File to a cache file for precomputing video/text embeddings and enabling faster computation.
@@ -27,12 +30,17 @@ class SimilarityVLM(ABC):
         """
 
         # Load cache and set cache flags
-        self.use_cache = False  # Set to true in load_cache if cache_file is not None
         self.cache_file = cache_file
-        self.cache_dir = cache_dir
         self.reset_cache = reset_cache
-        self.embed_cache = {}  # Initialize self.embed_cache to empty dictionary, maps video-path or text --> tensor path
-        self.load_cache()  # Initialize self.embed_cache
+        
+        self.disk_cache = None
+        if self.cache_file is not None:
+            self.disk_cache = shelve.open(self.cache_file)
+            
+            if self.reset_cache:
+                self.disk_cache.clear()
+                #self.disk_cache.close()
+                #self.disk_cache = shelve.open(self.cache_file)
         
     def params(self) -> dict:
         """
@@ -42,79 +50,48 @@ class SimilarityVLM(ABC):
         :rtype: dict
         """
         return {}
-
-    def load_cache(self):
-        """
-        Loads cache of precomputed video embeddings for each video path string
-        :return:
-        """
-        if self.cache_file is not None and self.cache_dir is not None:
-            self.use_cache = True
-            
-        # Optionally delete cache before init
-        if self.use_cache and self.reset_cache:
-            if os.path.exists(self.cache_file):
-                os.remove(self.cache_file)
-            if os.path.exists(self.cache_dir):
-                for embed_file in os.listdir(self.cache_dir):
-                    os.remove(os.path.join(self.cache_dir, embed_file))
-                os.rmdir(self.cache_dir)
                 
-        # Init cache
-        if self.use_cache:
-            if os.path.exists(self.cache_file) and os.path.exists(self.cache_dir):
-                with open(self.cache_file, "rb") as cf:
-                    self.embed_cache = pickle.load(cf)
-            else:
-                os.makedirs(self.cache_dir, exist_ok=True)
-                self.embed_cache = {}
+    def cache_item_key(self, video_path: Optional[str] = None, text: Optional[str] = None) -> str:
+        """Generates the cache item key for a given video path or text input. This key should uniquely
+        identify a possible embedding this vlm could produce.
 
-    def save_cache(self):
-        """
-        Saves the cached video embeddings.  Note: this needs to be called in the script using the SimilarityVLM
-        :return:
-        """
-        if self.use_cache:
-            with open(self.cache_file, "wb") as cf:
-                pickle.dump(self.embed_cache, cf)
+        Args:
+            video_path (Optional[str], optional): _description_. Defaults to None.
+            text (Optional[str], optional): _description_. Defaults to None.
 
-    def cache_video(self, path, video_embed):
+        Returns:
+            str: _description_
         """
-        Caches video embedding
-        :param path: Path to video file
-        :param video_embed: Embedding created by Similarity VLM
-        :return:
-        """
-        if self.use_cache:
-            embed_filename = path.strip("/").replace("/", ".")
-            torch.save(video_embed, os.path.join(self.cache_dir, embed_filename))
-            self.embed_cache[path] = embed_filename
-            
-    def cache_text(self, text, text_embed):
-        """
-        Caches text embedding
-        :param text: Input text (lower case)
-        :param text_embed: Embedding created by Similarity VLM
-        :return:
-        """
-        if self.use_cache:
-            embed_filename = text.replace(" ", "_")
-            torch.save(text_embed, os.path.join(self.cache_dir, embed_filename))
-            self.embed_cache[text] = embed_filename
+        assert sum([video_path is not None, text is not None]) == 1, "Exactly one arg video_path or text must be set"
+        
+        key_dict = self.params()
+        if video_path is not None:
+            key_dict["video_path"] = video_path
+        elif text is not None:
+            key_dict["text"] = text
+        else:
+            raise ValueError
+        
+        return json.dumps(key_dict)
 
     @lru_cache(maxsize=MEM_CACHE_SIZE)
     def get_text_embeds(self, text):
         """
         Embeds text one string at a time
-        :param text: List of strings to embed
+        :param text: String to embed
         :return: Pytorch embedding tensor for the text
         """
-        if text in self.embed_cache:
-            return torch.load(os.path.join(self.cache_dir, self.embed_cache[text]))
+        cache_item_key = self.cache_item_key(text=text)
+        if self.disk_cache is not None and cache_item_key in self.disk_cache:
+            return self.disk_cache[cache_item_key]
         
         text_embed = self.text_encoder(text)
-        self.cache_text(text, text_embed)
         
+        if self.disk_cache is not None:
+            self.disk_cache[cache_item_key] = text_embed
+            #self.disk_cache.close()
+            #self.disk_cache = shelve.open(self.cache_file)
+            
         return text_embed
 
     @lru_cache(maxsize=MEM_CACHE_SIZE)
@@ -125,13 +102,18 @@ class SimilarityVLM(ABC):
         :param path: Path to the video
         :return:
         """
-        if video_path in self.embed_cache:
-            return torch.load(os.path.join(self.cache_dir, self.embed_cache[video_path]))  # Note: May need to add .cuda() or change dtype
-
-        video_embed = self.video_encoder(video_path)
-        self.cache_video(video_path, video_embed)
-
-        return video_embed
+        cache_item_key = self.cache_item_key(video_path=video_path)
+        if self.disk_cache is not None and cache_item_key in self.disk_cache:
+            return self.disk_cache[cache_item_key]
+        
+        vid_embed = self.video_encoder(video_path)
+        
+        if self.disk_cache is not None:
+            self.disk_cache[cache_item_key] = vid_embed
+            #self.disk_cache.close()
+            #self.disk_cache = shelve.open(self.cache_file)
+            
+        return vid_embed
 
     @abstractmethod
     def text_encoder(self, text):

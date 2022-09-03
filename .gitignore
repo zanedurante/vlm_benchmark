@@ -8,13 +8,6 @@ __pycache__/
 MILES/pretrained/
 
 # Cache files
-VTTWINS/cache_dir
-VTTWINS/cache_index.pickle
-CLIP/cache_dir
-CLIP/cache_index.pickle
-UNIVL/cache_dir
-UNIVL/cache_index.pickle
-MILES/cache_dir
-MILES/cache_index.pickle
-video_clip/cache_dir
-video_clip/cache_index.pickle
+cache.bak
+cache.dat
+cache.dir

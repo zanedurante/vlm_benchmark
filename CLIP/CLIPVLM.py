@@ -14,8 +14,7 @@ from similarity_metrics import Similarity
 
 # Default cache locations
 FILE_DIR = os.path.dirname(os.path.realpath(__file__))
-CACHE_INDEX_NAME = "cache_index.pickle"
-CACHE_DIR_NAME = "cache_dir"
+CACHE_NAME = "cache"
 
 
 
@@ -44,11 +43,7 @@ class ClipVLM(SimilarityVLM):
         self.processor = CLIPProcessor.from_pretrained(path)
         self.model.to(DEVICE)
         
-        # Cache file locations
-        cache_index_path = os.path.join(FILE_DIR, CACHE_INDEX_NAME)
-        cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
-
-        super().__init__(cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
+        super().__init__(cache_file=os.path.join(FILE_DIR, CACHE_NAME), reset_cache=reset_cache)
         
     def params(self) -> dict:
         """

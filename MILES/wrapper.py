@@ -42,8 +42,7 @@ VIDEO_TRANSFORM = init_transform_dict()["test"]
 PRETRAINED_CHECKPOINT_PATH = os.path.join(FILE_DIR, "pretrained/MILES.pth")
 
 # Cache file location
-CACHE_INDEX_NAME = "cache_index.pickle"
-CACHE_DIR_NAME = "cache_dir"
+CACHE_NAME = "cache"
 
 class MILES_SimilarityVLM(SimilarityVLM):
     def __init__(self, reset_cache: bool = False):
@@ -60,11 +59,7 @@ class MILES_SimilarityVLM(SimilarityVLM):
         
         # Video transform
         
-        # Cache file locations
-        cache_index_path = os.path.join(FILE_DIR, CACHE_INDEX_NAME)
-        cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
-        
-        super().__init__(cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
+        super().__init__(cache_file=os.path.join(FILE_DIR, CACHE_NAME), reset_cache=reset_cache)
         
     def text_encoder(self, text):
         """

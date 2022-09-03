@@ -75,8 +75,7 @@ UNIVL_TASK_CONFIG = SimpleNamespace(
 
 
 # Cache file location
-CACHE_INDEX_NAME = "cache_index.pickle"
-CACHE_DIR_NAME = "cache_dir"
+CACHE_NAME = "cache"
 
 class UniVL_SimilarityVLM(SimilarityVLM):
     def __init__(self, reset_cache: bool = False) -> None:
@@ -98,11 +97,7 @@ class UniVL_SimilarityVLM(SimilarityVLM):
         self.model.to(DEVICE)
         self.model.eval()
         
-        # Cache file locations
-        cache_index_path = os.path.join(FILE_DIR, CACHE_INDEX_NAME)
-        cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
-        
-        super().__init__(cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
+        super().__init__(cache_file=os.path.join(FILE_DIR, CACHE_NAME), reset_cache=reset_cache)
     
     def text_encoder(self, text):
         """

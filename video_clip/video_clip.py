@@ -20,8 +20,7 @@ import pdb
 
 # Default cache locations
 FILE_DIR = os.path.dirname(os.path.realpath(__file__))
-CACHE_INDEX_NAME = "cache_index.pickle"
-CACHE_DIR_NAME = "cache_dir"
+CACHE_NAME = "cache"
 
 
 class VideoClipVLM(SimilarityVLM):
@@ -30,12 +29,14 @@ class VideoClipVLM(SimilarityVLM):
     repository MMPT (original repo link is here: https://github.com/facebookresearch/fairseq/tree/main/examples/MMPT).
     TODO: Implement the larger version of CLIP since this should get better performance.
     """
-    def __init__(self, path="video_clip/MMPT_updated/projects/retri/videoclip/how2.yaml", num_seconds=2,
-                 use_cuda=False, reset_cache=False):
+    def __init__(self, path: str = "video_clip/MMPT_updated/projects/retri/videoclip/how2.yaml",
+                 num_seconds: int = 2, sample_strat: str = "center", 
+                 use_cuda: bool = False, reset_cache: bool = False):
 
         """
         :param path: Path to the videoclip config file (see setup.txt)
         :param num_seconds: Number of seconds to use in the video during inference, converts to 30fps
+        :param sample_strat: Method for sampling frames from the video. Options: "center", "start", "spread"
         :param use_cuda: Whether to use cuda for GPU (if available), if false uses CPU
         :param reset_cache: Whether to reset the embedding cache
         """
@@ -44,17 +45,19 @@ class VideoClipVLM(SimilarityVLM):
         self.cuda = use_cuda and DEVICE == "cuda"
         self.path = path  # Pretrained video clip identifier
         self.num_seconds = num_seconds
+        self.sample_strat = sample_strat
         self.transforms = self.get_transforms()
+        
+        assert type(self.path) is str
+        assert type(self.num_seconds) is int
+        assert self.sample_strat in ["center", "start", "spread"]
 
         decord.bridge.set_bridge("torch")  # Video loader
         
         # Load model
         self.load_model(path=self.path)
 
-        # Cache file locations
-        cache_index_path = os.path.join(FILE_DIR, CACHE_INDEX_NAME)
-        cache_dir_path = os.path.join(FILE_DIR, CACHE_DIR_NAME)
-        super().__init__(cache_file=cache_index_path, cache_dir=cache_dir_path, reset_cache=reset_cache)
+        super().__init__(cache_file=os.path.join(FILE_DIR, CACHE_NAME), reset_cache=reset_cache)
 
 
     def params(self) -> dict:
@@ -67,6 +70,7 @@ class VideoClipVLM(SimilarityVLM):
         return {
             "path": self.path,
             "num_seconds": self.num_seconds,
+            "sample_strat": self.sample_strat
         }
 
     def load_model(self, path="video_clip/MMPT_updated/projects/retri/videoclip/how2.yaml"):
@@ -132,28 +136,66 @@ class VideoClipVLM(SimilarityVLM):
     def open_video(self, path):
         """
         Opens video and returns basic, non-transformed video tensor
+        Video model requires blocks of 1 second, 30 frame videos
         :param path:
         :return:
         """
         video_reader = decord.VideoReader(path, num_threads=1)
         native_fps = video_reader.get_avg_fps()
         total_framecount_native = len(video_reader)
+
+        # Determine the length of the video window to focus on (in seconds/blocks)
+        # NOTE: Videos with duration < 1sec will be stretched as though they cover 1sec
+        focused_seconds = np.clip(int(total_framecount_native / native_fps), 1, self.num_seconds)
         
-        # The model is given a central window of consecutive frames, assumed to be at 30 FPS
-        # Calculate size of desired window in number of frames for both native fps and desired 30 fps
-        focused_framecount_native = math.ceil(native_fps * self.num_seconds)
-        focused_framecount_desired = 30 * math.ceil(self.num_seconds) # Ensure input has multiple of 30 frames
+        # Extract self.num_seconds 1sec/30frame video blocks from the center of the total video duration
+        if self.sample_strat == "center":
+            # Calculate size of focus window in number of frames for both native fps and desired 30 fps
+            focused_framecount_native = math.ceil(native_fps * focused_seconds)
+            focused_framecount_desired = 30 * focused_seconds # Ensure input has multiple of 30 frames
+            
+            # Calculate start/end frame indices to sample in native fps
+            focus_start_native = max(total_framecount_native // 2 - focused_framecount_native // 2, 0)
+            focus_end_native = min(focus_start_native + focused_framecount_native, total_framecount_native)
+            
+            # Convert native frame indices to desired framerate
+            focus_frame_indices_desired = np.minimum(np.round(np.linspace(focus_start_native, focus_end_native, focused_framecount_desired, endpoint=False)), total_framecount_native - 1)
+            
+            video_tensor = video_reader.get_batch(focus_frame_indices_desired)
+            return video_tensor
         
-        # Calculate start/end frame indices to sample in native fps
-        focus_start_native = max(total_framecount_native // 2 - focused_framecount_native // 2, 0)
-        focus_end_native = min(focus_start_native + focused_framecount_native, total_framecount_native)
+        # Extract self.num_seconds 1sec/30frame video blocks from the start of the total video duration
+        if self.sample_strat == "start":
+            # Calculate size of focus window in number of frames for both native fps and desired 30 fps
+            focused_framecount_native = math.ceil(native_fps * focused_seconds)
+            focused_framecount_desired = 30 * focused_seconds # Ensure input has multiple of 30 frames
+            
+            # Calculate start/end frame indices to sample in native fps
+            focus_start_native = 0
+            focus_end_native = min(focused_framecount_native, total_framecount_native)
+            
+            # Convert native frame indices to desired framerate
+            focus_frame_indices_desired = np.minimum(np.round(np.linspace(focus_start_native, focus_end_native, focused_framecount_desired, endpoint=False)), total_framecount_native - 1)
+            
+            video_tensor = video_reader.get_batch(focus_frame_indices_desired)
+            return video_tensor
         
-        # Convert native frame indices to desired framerate
-        # NOTE: This will excessively stretch out any videos which are shorter than self.num_seconds, which may be undesired
-        focus_frame_indices_desired = np.minimum(np.round(np.linspace(focus_start_native, focus_end_native, focused_framecount_desired, endpoint=False)), total_framecount_native - 1)
+        # Collect self.num_seconds 1s/30frame blocks evenly spread throughout the video duration
+        if self.sample_strat == "spread":
+            block_frame_starts_native = np.round(np.linspace(0, total_framecount_native, focused_seconds, endpoint=False))
+            focus_frame_indices = []
+            for block_frame_start_ind in block_frame_starts_native:
+                block_frame_end_ind = min(block_frame_start_ind + native_fps, total_framecount_native)
+                block_frame_indices = np.minimum(
+                    np.round(np.linspace(block_frame_start_ind, block_frame_end_ind, 30, endpoint=False)),
+                    block_frame_end_ind - 1
+                )
+                focus_frame_indices += block_frame_indices.tolist()
+                
+            video_tensor = video_reader.get_batch(focus_frame_indices)
+            return video_tensor
         
-        video_tensor = video_reader.get_batch(focus_frame_indices_desired)
-        return video_tensor
+        raise ValueError(f"Unrecognized sample strat: {self.sample_strat}")
 
     def transform(self, video):
         """
@@ -164,7 +206,7 @@ class VideoClipVLM(SimilarityVLM):
         inputs = self.transforms(video)
         # B, T, FPS, H, W, C (VideoCLIP is trained on 30 fps of s3d)
         _, h, w, c = inputs.size()
-        inputs = inputs.view(1, self.num_seconds, 30, h, w, c)  # Add singleton batch dimension
+        inputs = inputs.view(1, -1, 30, h, w, c)  # Add singleton batch dimension
         return inputs
 
     def video_encoder(self, path):
@@ -193,7 +235,7 @@ class VideoClipVLM(SimilarityVLM):
         transforms = Compose([
             # Change to C, T, H, W for UniformTemporalSubsampling
             Permute((3, 0, 1, 2)),
-            UniformTemporalSubsample(30*self.num_seconds, ),
+            #UniformTemporalSubsample(30*self.num_seconds, ),
             Lambda(lambda x: x/255.0), # Only normalization for VideoCLIP is / 255.0
             ShortSideScale(size=256),
             CenterCrop(224),
