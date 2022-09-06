@@ -82,7 +82,9 @@ class ClipVLM(SimilarityVLM):
         frame_idxs = self.get_frame_idxs(vlen)
         frames = video_reader.get_batch(frame_idxs)
         frames = frames.float() / 255
-        frames = frames.permute(0, 3, 1, 2).squeeze()  # Get rid of single frame dimension
+        frames = frames.permute(0, 3, 1, 2)
+        # Convert frame batch axis into list
+        frames = [frame for frame in frames]
         
         # Preprocess
         inputs = self.processor(images=frames, return_tensors="pt")
