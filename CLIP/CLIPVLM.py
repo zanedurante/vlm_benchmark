@@ -92,7 +92,8 @@ class ClipVLM(SimilarityVLM):
         # Encode
         with torch.no_grad():
             video_features = self.model.get_image_features(**inputs)  # Frame-level video features
-            video_features = video_features.cpu().numpy()[0]
+            video_features = video_features.mean(dim=0) # Average over sampled frames from this video
+            video_features = video_features.cpu().numpy()
 
         return video_features
 
