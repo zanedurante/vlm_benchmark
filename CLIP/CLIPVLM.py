@@ -64,7 +64,7 @@ class ClipVLM(SimilarityVLM):
         :param tokens:
         :return:
         """
-        tokens = self.tokenizer(text, padding=True, return_tensors="pt")
+        tokens = self.tokenizer(text, padding=True, return_tensors="pt", max_length=77, truncation=True)
         with torch.no_grad():
             text_features = self.model.get_text_features(**tokens).cpu().numpy()[0]
         return text_features
