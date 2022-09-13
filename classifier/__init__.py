@@ -1,2 +1,4 @@
-from .FewShotClassifier import FewShotClassifier
-from .WeightedTextFewShotClassifier import WeightedTextFewShotClassifier
+from .base import FewShotClassifier
+from .weighted_average import WeightedTextFewShotClassifier
+from .hard_prompt import HardPromptFewShotClassifier
+from .nearest_neighbors import NearestNeighborFewShotClassifier

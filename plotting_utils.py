@@ -18,7 +18,10 @@ def filter(results: pd.DataFrame, filter: dict) -> pd.DataFrame:
         
         valid_col_indices = np.zeros(len(results)).astype(bool)
         for filter_val in filter_val_list:
-            valid_col_indices = valid_col_indices | (results[filter_col] == filter_val)
+            if type(filter_val) is not str and np.isnan(filter_val): # Special handling required to check for nan results (which imply that the column was not filled for this row)
+                valid_col_indices = valid_col_indices | np.isnan(results[filter_col])
+            else:
+                valid_col_indices = valid_col_indices | (results[filter_col] == filter_val)
         filtered_indices = filtered_indices & valid_col_indices
         
     return results[filtered_indices]

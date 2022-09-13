@@ -1,26 +1,42 @@
 from typing import Optional
 import numpy as np
+from sklearn.neighbors import KNeighborsClassifier
 
 from SimilarityVLM import SimilarityVLM
 from similarity_metrics import Similarity
-from .FewShotClassifier import FewShotClassifier
+from .base import FewShotClassifier
+
 
 '''
 Class for adapting a SimilarityVLM as a few-shot classifier,
-using a ProtoNet-style algorithm.
+naively chooses the class which has the closest embedding to the query
+(whether video or text). 
 '''
 
-class WeightedTextFewShotClassifier(FewShotClassifier):
+class NearestNeighborFewShotClassifier(FewShotClassifier):
     '''
     Args:
         vlm (SimilarityVLM):            The vlm to use to embed video and text
         metric (Similarity | None):     The similarity metric to use, if None uses vlm default
-        text_weight (float):            Relative weight of text embeddings compared to video embeddings when computing class prototypes
+        neighbor_count (int):           Number of neighbors which vote for the resulting prediction (K in K-nearest-neighbors)
+        neighbor_weights (str):         Method for weighing votes of nearest neighbors. Must be in ["uniform", "distance"]
     '''
-    def __init__(self, vlm: SimilarityVLM, metric: Optional[Similarity] = None, text_weight: float = 1.0) -> None:
-        super().__init__(vlm=vlm, metric=metric)
+    def __init__(self, vlm: SimilarityVLM, metric: Optional[Similarity] = None, neighbor_count: int = 1, neighbor_weights: str = "uniform") -> None:
+        super().__init__(vlm, metric)
         
-        self.text_weight = float(text_weight)
+        assert type(neighbor_count) is int and neighbor_count > 0
+        assert neighbor_weights in ["uniform", "distance"]
+        
+        self.neighbor_count = neighbor_count
+        self.neighbor_weights = neighbor_weights
+        
+        if self.metric is Similarity.COSINE:
+            self.sklearn_metric = "cosine"
+        elif self.metric is Similarity.DOT:
+            self.sklearn_metric = lambda a, b: np.exp(-Similarity.DOT(a[None, :], b[None, :])[0, 0])
+        else:
+            raise NotImplementedError
+        
         
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
@@ -30,7 +46,8 @@ class WeightedTextFewShotClassifier(FewShotClassifier):
     def params(self) -> dict:
         return {
             "metric": self.metric.name,
-            "text_weight": self.text_weight
+            "neighbor_count": self.neighbor_count,
+            "neighbor_weights": self.neighbor_weights
         }
         
     '''
@@ -60,28 +77,32 @@ class WeightedTextFewShotClassifier(FewShotClassifier):
         flat_query_embeds = np.vstack([self.vlm.get_video_embeds(vid) for vid in query_video_paths.flatten()])
         query_embeds = flat_query_embeds.reshape(n_way, n_query, -1)
         
-        # Create Category Prototypes (n_way, embed_dim)
+        # Collect all support example embeddings (text embeds followed by n_support video embeds)
         support_embeds = [] # Each element should have shape (n_way, n_supporting_embeds, embed_dim)
-        support_embed_weights = []
         
         text_embeds = np.vstack([self.vlm.get_text_embeds(name) for name in category_names])
         support_embeds.append(text_embeds[:, None, :])
-        support_embed_weights += [self.text_weight]
         
         if n_support > 0:
             flat_support_embeds = np.vstack([self.vlm.get_video_embeds(vid) for vid in support_video_paths.flatten()])
             support_vid_embeds = flat_support_embeds.reshape(n_way, n_support, -1)
             support_embeds.append(support_vid_embeds)
-            support_embed_weights += [1] * n_support
         
         support_embeds = np.concatenate(support_embeds, axis=1)
-        prototype_embeds = np.average(support_embeds, axis=1, weights=support_embed_weights)
+        flat_support_embeds = support_embeds.reshape(n_way * (n_support + 1), -1)
+        support_category_inds = (np.arange(n_way)[:, None] * np.ones((n_way, n_support + 1))).astype(int)
+        flat_support_category_inds = support_category_inds.flatten()
         
-        # Compare query similarity to prototypes
-        flat_query_to_proto_similarities = self.metric(flat_query_embeds, prototype_embeds)
-        query_to_proto_similarities = flat_query_to_proto_similarities.reshape(n_way, n_query, n_way)
+        # Fit KNN classifier
+        knn = KNeighborsClassifier(
+            n_neighbors=min(self.neighbor_count, n_way * (n_support + 1)),
+            weights=self.neighbor_weights,
+            metric=self.sklearn_metric
+        )
+        knn.fit(flat_support_embeds, flat_support_category_inds)
         
-        # Choose category index with max similarity for each query
-        query_category_index_predictions = np.argmax(query_to_proto_similarities, axis=2)
+        # Predict for query embeds
+        flat_query_predictions = knn.predict(flat_query_embeds)
+        query_predictions = flat_query_predictions.reshape(n_way, n_query)
         
-        return query_category_index_predictions
+        return query_predictions

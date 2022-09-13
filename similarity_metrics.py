@@ -16,14 +16,14 @@ class Similarity(Enum):
         similarities (np.array):    Shape = (A, B)
     '''
 
-    def __call__(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    def __call__(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:        
         if self is Similarity.DOT:
             return np.sum(a[:, None, :] * b[None, :, :], axis=2)
 
         if self is Similarity.COSINE:
             a_mag = np.sqrt(np.sum(np.square(a), axis=1))
             b_mag = np.sqrt(np.sum(np.square(b), axis=1))
-            return np.sum(a[:, None, :] * b[None, :, :], axis=2) / (a_mag * b_mag)
+            return np.sum(a[:, None, :] * b[None, :, :], axis=2) / (a_mag[:, None] * b_mag[None, :])
 
         if self is Similarity.EUCLID:
             return np.linalg.norm(a[:, None, :] - b[None, :, :], axis=2)
