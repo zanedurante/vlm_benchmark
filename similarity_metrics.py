@@ -26,4 +26,4 @@ class Similarity(Enum):
             return np.sum(a[:, None, :] * b[None, :, :], axis=2) / (a_mag[:, None] * b_mag[None, :])
 
         if self is Similarity.EUCLID:
-            return np.linalg.norm(a[:, None, :] - b[None, :, :], axis=2)
+            return -1 * np.linalg.norm(a[:, None, :] - b[None, :, :], axis=2)

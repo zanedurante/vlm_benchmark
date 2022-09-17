@@ -33,7 +33,7 @@ class NearestNeighborFewShotClassifier(FewShotClassifier):
         if self.metric is Similarity.COSINE:
             self.sklearn_metric = "cosine"
         elif self.metric is Similarity.DOT:
-            self.sklearn_metric = lambda a, b: np.exp(-Similarity.DOT(a[None, :], b[None, :])[0, 0])
+            self.sklearn_metric = lambda a, b: np.exp(-Similarity.DOT(a[None, :], b[None, :])[0, 0] / 100)
         else:
             raise NotImplementedError
         
@@ -90,6 +90,7 @@ class NearestNeighborFewShotClassifier(FewShotClassifier):
         
         support_embeds = np.concatenate(support_embeds, axis=1)
         flat_support_embeds = support_embeds.reshape(n_way * (n_support + 1), -1)
+        
         support_category_inds = (np.arange(n_way)[:, None] * np.ones((n_way, n_support + 1))).astype(int)
         flat_support_category_inds = support_category_inds.flatten()
         
@@ -97,7 +98,8 @@ class NearestNeighborFewShotClassifier(FewShotClassifier):
         knn = KNeighborsClassifier(
             n_neighbors=min(self.neighbor_count, n_way * (n_support + 1)),
             weights=self.neighbor_weights,
-            metric=self.sklearn_metric
+            metric=self.sklearn_metric,
+            algorithm="brute"
         )
         knn.fit(flat_support_embeds, flat_support_category_inds)
         
