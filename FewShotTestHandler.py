@@ -6,7 +6,7 @@ from tqdm.autonotebook import tqdm
 import json
 
 from SimilarityVLM import SimilarityVLM
-from classifier.FewShotClassifier import FewShotClassifier
+from classifier import FewShotClassifier
 from dataset import DatasetHandler
 
 
@@ -70,8 +70,9 @@ class FewShotTestHandler:
         # Load dataset to generate tasks with the desired params
         few_shot_dataset = dataset.few_shot(n_episodes, n_way, n_support, n_query)
         
-        correct_predictions = 0
+        task_accuracies = []
         total_queries = 0
+        total_correct = 0
         dataset_iter = tqdm(few_shot_dataset, leave=False)
         for vid_paths, category_names in dataset_iter:
             
@@ -83,13 +84,21 @@ class FewShotTestHandler:
                 
             query_predictions = classifier.predict(category_names, support_vid_paths, query_vid_paths)
             
-            correct_predictions += np.sum(query_predictions == np.arange(n_way)[:, None])
-            total_queries += n_way * n_query    
-            accuracy = correct_predictions / total_queries
-            dataset_iter.set_postfix({"accuracy": accuracy})
+            # Compute accuracy for this sampled task
+            correct_predictions = np.sum(query_predictions == np.arange(n_way)[:, None])
+            task_accuracy = correct_predictions / (n_way * n_query)
+            task_accuracies.append(task_accuracy)
+            
+            # Aggregate for accuracy over all sampled tasks
+            total_queries += n_way * n_query
+            total_correct += correct_predictions
+            dataset_iter.set_postfix({"accuracy": total_correct / total_queries})
+        
+        accuracy = total_correct / total_queries
+        accuracy_std = np.std(task_accuracies)
         
         # Add to test results and save
-        self.results = append_test_result(self.results, classifier, dataset, n_way, n_support, n_query, n_episodes, accuracy)
+        self.results = append_test_result(self.results, classifier, dataset, n_way, n_support, n_query, n_episodes, accuracy, accuracy_std)
         if self.test_results_path is not None:
             self.results.to_csv(self.test_results_path, index=False)
         
@@ -104,7 +113,7 @@ Test Results DataFrame Utilities
 
 def dataframe_format(classifier: FewShotClassifier, dataset: DatasetHandler,
                      n_way: int, n_support: int, n_query: int, n_episodes: int,
-                     accuracy: Optional[float] = None) -> dict:
+                     accuracy: Optional[float] = None, accuracy_std: Optional[float] = None) -> dict:
     row = {
         "vlm_class": classifier.vlm.__class__.__name__,
         "classifier_class": classifier.__class__.__name__,
@@ -125,6 +134,9 @@ def dataframe_format(classifier: FewShotClassifier, dataset: DatasetHandler,
         
     if accuracy is not None:
         row["accuracy"] = accuracy
+        
+    if accuracy_std is not None:
+        row["accuracy_std"] = accuracy_std
 
     return row
 
@@ -144,9 +156,9 @@ def test_already_stored(results: pd.DataFrame,
 def append_test_result(results: pd.DataFrame,
                        classifier: FewShotClassifier, dataset: DatasetHandler,
                        n_way: int, n_support: int, n_query: int, n_episodes: int,
-                       accuracy: float) -> pd.DataFrame:
+                       accuracy: float, accuracy_std: float) -> pd.DataFrame:
     
-    formatted_row = dataframe_format(classifier, dataset, n_way, n_support, n_query, n_episodes, accuracy)
+    formatted_row = dataframe_format(classifier, dataset, n_way, n_support, n_query, n_episodes, accuracy, accuracy_std)
     
     # Check if any new columns need to be added (new vlm/classifier-specific params)
     new_columns = set(formatted_row.keys()) - set(results.columns)
@@ -159,7 +171,7 @@ def append_test_result(results: pd.DataFrame,
         sorted_vlm_param_columns = sorted(col for col in results.columns if "vlm." in col)
         sorted_classifier_param_columns = sorted(col for col in results.columns if "classifier." in col)
         sorted_columns = ["vlm_class"] + sorted_vlm_param_columns + ["classifier_class"] + sorted_classifier_param_columns + \
-                         ["dataset", "n_way", "n_support", "n_query", "n_episodes", "accuracy"]
+                         ["dataset", "n_way", "n_support", "n_query", "n_episodes", "accuracy", "accuracy_std"]
         results = results.reindex(columns=sorted_columns)
         
     results.loc[len(results)] = formatted_row
