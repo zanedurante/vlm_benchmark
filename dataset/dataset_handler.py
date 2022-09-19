@@ -1,5 +1,9 @@
 import os, sys
+import json, itertools
+import numpy as np
+from tqdm.autonotebook import tqdm
 
+from SimilarityVLM import SimilarityVLM
 from .dataset_types import SequentialVideoDataset, SequentialCategoryNameDataset, FewShotTaskDataset
 
 
@@ -129,3 +133,74 @@ class DatasetHandler:
     
     def few_shot(self, n_episodes: int, n_way: int, n_support: int, n_query: int) -> FewShotTaskDataset:
         return FewShotTaskDataset(self.data_dict, n_episodes, n_way, n_support, n_query)
+    
+    def fill_cache(self, vlm: SimilarityVLM) -> None:
+        """Triggers the given vlm to generate embeddings for every video and text referenced
+        in this dataset split, saving the resulting cache both disk and mem.
+
+        Args:
+            vlm (SimilarityVLM): VLM to fill the cache for
+        """
+        
+        video_dataset = self.sequential_video()
+        for i, vid_path in enumerate(tqdm(video_dataset, leave=False)):
+            vlm.get_video_embeds(vid_path)
+                
+        text_dataset = self.sequential_category_name()
+        for i, text in enumerate(tqdm(text_dataset, leave=False)):
+            vlm.get_text_embeds(text)
+            
+    def export_embeddings(self, vlm: SimilarityVLM, save_dir_path: str) -> None:
+        """Computes embeddings for each text and video in the dataset, saving them
+        as numpy arrays in .npy format.
+        Output Files (in <save_dir_path>):
+            category_names.npy:             1D array of text names for each category. Category index
+                                            is consistent across all files.
+            category_name_embeddings.npy:   2D array of text embeddings for each category. Dim 1 is category index,
+                                            dim 2 is embedding dim.
+            video_category_indices.npy:     1D array of category indices (corresponding to category_names.npy) for
+                                            each video path/embedding.
+            video_paths.npy:                1D array of video paths for each video.
+            video_embeddings.npy:           2D array of video embeddings for each video.
+                                            Dim 1 is video index, dim 32 is embedding dim.
+            vlm_info.json:                  Class and parameters for the VLM instance used.
+
+        Args:
+            vlm (SimilarityVLM): _description_
+            save_dir_path (str): _description_
+        """
+        self.fill_cache(vlm)
+        
+        os.makedirs(save_dir_path, exist_ok=True)
+        
+        category_names = np.array(list(self.data_dict.keys()))
+        np.save(os.path.join(save_dir_path, "category_names.npy"), category_names)
+        
+        category_name_embeddings = np.array([
+            vlm.get_text_embeds(name)
+            for name in category_names
+        ])
+        np.save(os.path.join(save_dir_path, "category_name_embeddings.npy"), category_name_embeddings)
+        
+        video_category_indices = []
+        video_paths = []
+        video_embeddings = []
+        for i, name in enumerate(category_names):
+            video_category_indices += [i] * len(self.data_dict[name])
+            video_paths += self.data_dict[name]
+            video_embeddings += [
+                vlm.get_video_embeds(path)
+                for path in self.data_dict[name]
+            ]
+        video_category_indices = np.array(video_category_indices)
+        video_paths = np.array(video_paths)
+        video_embeddings = np.array(video_embeddings)
+        
+        np.save(os.path.join(save_dir_path, "video_category_indices.npy"), video_category_indices)
+        np.save(os.path.join(save_dir_path, "video_paths.npy"), video_paths)
+        np.save(os.path.join(save_dir_path, "video_embeddings.npy"), video_embeddings)
+        
+        vlm_info_dict = vlm.params()
+        vlm_info_dict["class"] = vlm.__class__.__name__
+        with open(os.path.join(save_dir_path, "vlm_info.json"), "w") as fp:
+            json.dump(vlm_info_dict, fp, indent=2)
