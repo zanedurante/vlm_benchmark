@@ -19,11 +19,10 @@ class FrozenSimpleTest(unittest.TestCase):
         video_paths = [os.path.join(VIDEO_DIR_PATH, lab+".mp4") for lab in VIDEO_LABELS]
         video_embeds = []
         for path in video_paths:
-            video_embeds.append(vlm.get_video_embeds(path).squeeze())
+            video_embeds.append(vlm.get_video_embeds(path))
         video_embeds = np.asarray(video_embeds)
         outputs = Similarity.DOT(video_embeds, text_embeds)
         preds = np.argmax(outputs, -1)
-        print(outputs)
         assert np.array_equal(preds, [0, 1, 2])
 
 # TODO: Move to test utils files
