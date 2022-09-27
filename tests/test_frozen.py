@@ -4,19 +4,17 @@ import numpy as np
 
 from pytube import YouTube
 
-from video_clip import VideoClipVLM
+from frozen.frozen_vlm import FrozenVLM
 from similarity_metrics import Similarity
 
 VIDEO_DIR_PATH = "./test_videos/"
 VIDEO_LABELS = ["Cat", "Basketball", "Dog"]
 
 
-class VideoCLIPSimpleTest(unittest.TestCase):
-    def test_videoclip(self):
+class FrozenSimpleTest(unittest.TestCase):
+    def test_frozen(self):
         # Instantiate VideoCLIP
-        vlm = VideoClipVLM()
-        vlm.load_model()
-
+        vlm = FrozenVLM()
         text_embeds = np.asarray([vlm.get_text_embeds(label) for label in VIDEO_LABELS])
         video_paths = [os.path.join(VIDEO_DIR_PATH, lab+".mp4") for lab in VIDEO_LABELS]
         video_embeds = []
@@ -25,6 +23,7 @@ class VideoCLIPSimpleTest(unittest.TestCase):
         video_embeds = np.asarray(video_embeds)
         outputs = Similarity.DOT(video_embeds, text_embeds)
         preds = np.argmax(outputs, -1)
+        print(outputs)
         assert np.array_equal(preds, [0, 1, 2])
 
 # TODO: Move to test utils files

@@ -85,7 +85,7 @@ class ClipVLM(SimilarityVLM):
         frames = frames.permute(0, 3, 1, 2)
         # Convert frame batch axis into list
         frames = [frame for frame in frames]
-        
+
         # Preprocess
         inputs = self.processor(images=frames, return_tensors="pt")
         

@@ -20,6 +20,7 @@ class SimilarityVLM(ABC):
     and language separately and embed each modality into a joint text/video embedding space (like CLIP).
     """
 
+    # TODO: Standardize the usage of `load_model` across all VLMs so that constructor creates fully initialized model
     def __init__(self, cache_file=None, reset_cache=False):
         """
         Sets up embedding cache, leaves model-specific setup and loading to subclass __init__().
@@ -74,6 +75,7 @@ class SimilarityVLM(ABC):
         
         return json.dumps(key_dict)
 
+    # TODO: Support string or list of strings as input
     @lru_cache(maxsize=MEM_CACHE_SIZE)
     def get_text_embeds(self, text):
         """

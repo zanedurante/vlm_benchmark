@@ -27,7 +27,6 @@ class VideoClipVLM(SimilarityVLM):
     """
     Similarity-based VLM that uses VideoCLIP for frame and text encoders.  This uses our own modification of the FAIR
     repository MMPT (original repo link is here: https://github.com/facebookresearch/fairseq/tree/main/examples/MMPT).
-    TODO: Implement the larger version of CLIP since this should get better performance.
     """
     def __init__(self, path: str = "video_clip/MMPT_updated/projects/retri/videoclip/how2.yaml",
                  num_seconds: int = 2, sample_strat: str = "center", 
@@ -103,7 +102,6 @@ class VideoClipVLM(SimilarityVLM):
         :param text:, list of text to tokenize
         :return: Tokenized text
         """
-        # TODO: Document that you must get text embeds before getting video embeddings
         tokenized_text = []
         for t in text:
             caps, cmasks = self.model.aligner._build_text_seq(self.model.tokenizer(t, add_special_tokens=False)["input_ids"])
@@ -196,6 +194,7 @@ class VideoClipVLM(SimilarityVLM):
             return video_tensor
         
         raise ValueError(f"Unrecognized sample strat: {self.sample_strat}")
+
 
     def transform(self, video):
         """

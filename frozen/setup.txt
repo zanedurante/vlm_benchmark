@@ -1,0 +1,14 @@
+# Assuming in vlm_benchmark/frozen
+# Environment setup
+git clone https://github.com/m-bain/frozen-in-time.git
+cd frozen-in-time
+conda env create
+conda activate frozen
+pip install pytube decord # For testing + data loading
+
+# Download pretrained weights
+cd ../
+mkdir pretrained_models
+cd pretrained_models
+wget https://www.robots.ox.ac.uk/~maxbain/frozen-in-time/models/cc-webvid2m-4f_stformer_b_16_224.pth.tar
+
