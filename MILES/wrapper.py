@@ -1,4 +1,7 @@
 import os, sys
+from typing import Optional
+import numpy as np
+import decord
 from transformers import AutoTokenizer
 
 import torch
@@ -61,10 +64,10 @@ class MILES_SimilarityVLM(SimilarityVLM):
         
         super().__init__(cache_file=os.path.join(FILE_DIR, CACHE_NAME), reset_cache=reset_cache)
         
-    def text_encoder(self, text):
+    def text_encoder(self, text: str) -> np.ndarray:
         """
         Tokenize and encode text into a joint text/video embedding space
-        :param tokens:
+        :param text:
         :return:
         """
         # Tokenize
@@ -77,16 +80,23 @@ class MILES_SimilarityVLM(SimilarityVLM):
             
         return text_embed
 
-    def video_encoder(self, video_path):
+    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
         """
         Load, transform and encode a video file into a joint text/video embedding space
         :param video:
+        :param subvideo_start_frame:
+        :param subvideo_end_frame:
         :return:
         """
         # Load frames
-        frames, frame_indices = read_frames_cv2(video_path, NUM_FRAMES, "uniform", fix_start=None)
+        video_reader = decord.VideoReader(video_path, num_threads=1)
+        video_len = len(video_reader)
+        frame_indices = self.sample_frame_indices(video_len, subvideo_start_frame, subvideo_end_frame)
+        frames = video_reader.get_batch(frame_indices).asnumpy()
 
         # Transform
+        frames = torch.from_numpy(frames).float() / 255
+        frames = frames.permute(0, 3, 1, 2)
         frames = VIDEO_TRANSFORM(frames)
         video_input = torch.zeros(NUM_FRAMES, 3, INPUT_RES, INPUT_RES)
         video_input[:frames.shape[0]] = frames # Zero-pad frames to desired length
@@ -105,3 +115,15 @@ class MILES_SimilarityVLM(SimilarityVLM):
         :return:
         """
         return Similarity.COSINE
+    
+    def sample_frame_indices(self, video_len: int, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+        start_frame = subvideo_start_frame or 0
+        end_frame = subvideo_end_frame or video_len
+            
+        frame_indices = np.minimum(
+            np.round(
+                np.linspace(start_frame, end_frame, NUM_FRAMES, endpoint=False) + (end_frame - start_frame) / (2 * NUM_FRAMES)
+            ),
+            end_frame - 1
+        )
+        return frame_indices

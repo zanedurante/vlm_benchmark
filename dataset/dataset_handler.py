@@ -1,4 +1,5 @@
 import os, sys
+from typing import Optional
 import json, itertools
 import numpy as np
 from tqdm.autonotebook import tqdm
@@ -23,13 +24,16 @@ SMSM_DIR = "/home/datasets/smsm_cmn"
 MOMA_DIR = "/home/datasets/moma"
 
 class DatasetHandler:
-    def __init__(self, name: str, split: str = "val"):
+    def __init__(self, name: str, split: str = "val", class_limit: Optional[int] = None):
         self.name = name
         self.split = split
+        self.class_limit = class_limit
         
         if split not in ["train", "val", "test", "all"]:
             raise ValueError(f"Invalid dataset split: {split}")
         
+        if class_limit is not None and class_limit <= 0:
+            raise ValueError(f"Class limit must be positive or None. Got {class_limit}.")
         
         '''
         Populate self.data_dict.
@@ -97,8 +101,16 @@ class DatasetHandler:
         else:
             raise ValueError(f"Unrecognized dataset name: {name}")
         
+        # Artificially limit the number of classes after the fact
+        if self.class_limit is not None and self.class_limit < len(self.data_dict):
+            for extra_class in list(self.data_dict.keys())[self.class_limit:]:
+                del self.data_dict[extra_class]
+        
     def id(self) -> str:
-        return f"{self.name}.{self.split}"
+        if self.class_limit is None:
+            return f"{self.name}.{self.split}"
+        else:
+            return f"{self.name}.{self.split}.{self.class_limit}"
     
     def category_count(self) -> int:
         return len(self.data_dict)

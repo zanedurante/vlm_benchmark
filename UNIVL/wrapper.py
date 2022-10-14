@@ -3,6 +3,9 @@ import sys
 from types import SimpleNamespace
 import pandas as pd
 import numpy as np
+import decord
+from typing import Optional
+from torchvision.transforms import Compose, CenterCrop, Resize, Lambda
 
 import torch
 import torch.nn.functional as F
@@ -19,7 +22,6 @@ FILE_DIR = os.path.dirname(os.path.realpath(__file__))
 FEATURE_EXTRACTOR_REPO_PATH = os.path.join(FILE_DIR, "VideoFeatureExtractor")
 sys.path.append(FEATURE_EXTRACTOR_REPO_PATH)
 from extract import FRAMERATE_DICT, SIZE_DICT, CENTERCROP_DICT, FEATURE_LENGTH
-from video_loader import VideoLoader
 from preprocessing import Preprocessing
 from model import init_weight
 from videocnn.models import s3dg
@@ -27,22 +29,6 @@ from videocnn.models import s3dg
 FEATURE_EXTRACTOR_TYPE = "s3dg"
 FEATURE_EXTRACTOR_BATCH_SIZE = 64
 FEATURE_EXTRACTOR_PRETRAINED_PATH = os.path.join(FEATURE_EXTRACTOR_REPO_PATH, "model/s3d_howto100m.pth")
-
-'''
-Dummy version of VideoFeatureExtractor VideoLoader, which loads videos directly rather than
-from a specifically formatted csv file
-'''
-class SpoofVideoLoader(VideoLoader):
-    def __init__(self) -> None:
-        self.csv = pd.DataFrame([[None, None]], columns=["video_path", "feature_path"])
-        self.centercrop = CENTERCROP_DICT[FEATURE_EXTRACTOR_TYPE]
-        self.size = SIZE_DICT[FEATURE_EXTRACTOR_TYPE]
-        self.framerate = FRAMERATE_DICT[FEATURE_EXTRACTOR_TYPE]
-
-    def load_video(self, video_path: str) -> torch.Tensor:
-        self.csv = pd.DataFrame([[video_path, ""]], columns=["video_path", "feature_path"])
-        loader_object = self[0]
-        return self[0]["video"]
 
 
 
@@ -81,7 +67,11 @@ class UniVL_SimilarityVLM(SimilarityVLM):
     def __init__(self, reset_cache: bool = False) -> None:
         
         # S3D Video Feature Extractor
-        self.video_loader = SpoofVideoLoader()
+        self.pre_preprocessor_transform = Compose([
+            Lambda(lambda x: torch.permute(x, (0, 3, 1, 2))),
+            Resize(SIZE_DICT[FEATURE_EXTRACTOR_TYPE]),
+            CenterCrop(SIZE_DICT[FEATURE_EXTRACTOR_TYPE])
+        ])
         self.video_preprocessor = Preprocessing(FEATURE_EXTRACTOR_TYPE, FRAMERATE_DICT)
         self.s3d_model = s3dg.S3D(last_fc=False)
         init_weight(self.s3d_model, torch.load(FEATURE_EXTRACTOR_PRETRAINED_PATH))
@@ -131,19 +121,32 @@ class UniVL_SimilarityVLM(SimilarityVLM):
             
         return mean_pooled_text_embed.cpu().numpy()
     
-    def video_encoder(self, video_path):
+    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
         """
         Load, transform and encode a video file into a joint text/video embedding space
         :param video:
+        :param subvideo_start_frame:
+        :param subvideo_end_frame:
         :return:
         """
-        # Load and Preprocess
-        video = self.video_preprocessor(self.video_loader.load_video(video_path))
+        
+        # Load
+        video_reader = decord.VideoReader(video_path)
+        video_len = len(video_reader)
+        video_fps = video_reader.get_avg_fps()
+        raw_frames = video_reader.get_batch(self.sample_frame_indices(video_len, video_fps, subvideo_start_frame, subvideo_end_frame))
+
+        # Rescale and center-crop before video preprocessor and feature extractor
+        frames = torch.from_numpy(raw_frames.asnumpy())
+        frames = self.pre_preprocessor_transform(frames)
+
+        # Preprocess
+        frames = self.video_preprocessor(frames)
         
         # S3D Feature Extraction
-        features = torch.zeros(len(video), FEATURE_LENGTH[FEATURE_EXTRACTOR_TYPE], device=DEVICE)
-        for i in range(0, len(video), FEATURE_EXTRACTOR_BATCH_SIZE):
-            video_batch = video[i : i + FEATURE_EXTRACTOR_BATCH_SIZE].to(DEVICE)
+        features = torch.zeros(len(frames), FEATURE_LENGTH[FEATURE_EXTRACTOR_TYPE], device=DEVICE)
+        for i in range(0, len(frames), FEATURE_EXTRACTOR_BATCH_SIZE):
+            video_batch = frames[i : i + FEATURE_EXTRACTOR_BATCH_SIZE].to(DEVICE)
             feature_batch = self.s3d_model(video_batch)
             feature_batch = F.normalize(feature_batch, dim=1) # If args.l2_normalize (default is 1)
             features[i : i + FEATURE_EXTRACTOR_BATCH_SIZE] = feature_batch
@@ -173,3 +176,26 @@ class UniVL_SimilarityVLM(SimilarityVLM):
         :return:
         """
         return Similarity.DOT
+    
+    def sample_frame_indices(self, video_len: int, video_fps: float, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+        # Sample up to UNIVL_TASK_CONFIG.max_frames=64 frames at FRAMERATE_DICT["s3dg"]=16 fps to pass into the feature extractor model
+        
+        start_frame = subvideo_start_frame or 0
+        end_frame = subvideo_end_frame or video_len
+        
+        duration = (end_frame - start_frame) / video_fps
+        if duration <= UNIVL_TASK_CONFIG.max_frames / FRAMERATE_DICT[FEATURE_EXTRACTOR_TYPE]:
+            frame_indices = np.linspace(start_frame, end_frame, int(duration * FRAMERATE_DICT[FEATURE_EXTRACTOR_TYPE]), endpoint=False)
+            frame_indices = np.minimum(
+                np.round(frame_indices),
+                end_frame - 1
+            )
+        else:
+            unused_duration = duration - UNIVL_TASK_CONFIG.max_frames / FRAMERATE_DICT[FEATURE_EXTRACTOR_TYPE]
+            frame_indices = np.linspace(start_frame + int(unused_duration * video_fps / 2), end_frame - int(unused_duration * video_fps / 2), UNIVL_TASK_CONFIG.max_frames, endpoint=False)
+            frame_indices = np.minimum(
+                np.round(frame_indices),
+                end_frame - 1
+            )
+            
+        return frame_indices

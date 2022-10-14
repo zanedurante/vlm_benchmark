@@ -4,6 +4,7 @@ conda create --name VLM_VTTWINS python=3.9 -y
 conda activate VLM_VTTWINS
 conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch -y
 conda install -c conda-forge ffmpeg-python pandas numpy tqdm scikit-learn numba=0.53.1 -y
+pip install decord
 
 # For running jupyter notebooks
 conda install ipykernel ipywidgets -y

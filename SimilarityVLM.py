@@ -3,6 +3,7 @@ from typing import Optional
 import torch
 import pickle
 import os
+import numpy as np
 import json
 import shelve
 from functools import lru_cache
@@ -51,27 +52,40 @@ class SimilarityVLM(ABC):
         :rtype: dict
         """
         return {}
-                
-    def cache_item_key(self, video_path: Optional[str] = None, text: Optional[str] = None) -> str:
-        """Generates the cache item key for a given video path or text input. This key should uniquely
+    
+    def video_cache_key(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> str:
+        """Generates cache item key for a given video path, with optional frame bounds. This key should uniquely
         identify a possible embedding this vlm could produce.
 
         Args:
-            video_path (Optional[str], optional): _description_. Defaults to None.
-            text (Optional[str], optional): _description_. Defaults to None.
+            video_path (str): _description_
+            subvideo_start_frame (Optional[int], optional): _description_. Defaults to None.
+            subvideo_end_frame (Optional[int], optional): _description_. Defaults to None.
 
         Returns:
             str: _description_
         """
-        assert sum([video_path is not None, text is not None]) == 1, "Exactly one arg video_path or text must be set"
+        key_dict = self.params()
+        key_dict["video_path"] = video_path
+        if not (subvideo_start_frame is None and subvideo_end_frame is None):
+            key_dict["subvideo_start_frame"] = subvideo_start_frame
+            key_dict["subvideo_end_frame"] = subvideo_end_frame
+            
+        return json.dumps(key_dict)
+                
+    def text_cache_key(self, text: str) -> str:
+        """Generates the cache item key for a given video path or text input. This key should uniquely
+        identify a possible embedding this vlm could produce.
+
+        Args:
+            text (str): _description_.
+
+        Returns:
+            str: _description_
+        """
         
         key_dict = self.params()
-        if video_path is not None:
-            key_dict["video_path"] = video_path
-        elif text is not None:
-            key_dict["text"] = text
-        else:
-            raise ValueError
+        key_dict["text"] = text
         
         return json.dumps(key_dict)
 
@@ -83,7 +97,7 @@ class SimilarityVLM(ABC):
         :param text: String to embed
         :return: Pytorch embedding tensor for the text
         """
-        cache_item_key = self.cache_item_key(text=text)
+        cache_item_key = self.text_cache_key(text=text)
         if self.disk_cache is not None and cache_item_key in self.disk_cache:
             return self.disk_cache[cache_item_key]
         
@@ -97,18 +111,18 @@ class SimilarityVLM(ABC):
         return text_embed
 
     @lru_cache(maxsize=MEM_CACHE_SIZE)
-    def get_video_embeds(self, video_path):
+    def get_video_embeds(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None):
         """
         Embeds video one video tensor at a time
         TODO: See if we should change to encode batches of videos
         :param path: Path to the video
         :return:
         """
-        cache_item_key = self.cache_item_key(video_path=video_path)
+        cache_item_key = self.video_cache_key(video_path, subvideo_start_frame=subvideo_start_frame, subvideo_end_frame=subvideo_end_frame)
         if self.disk_cache is not None and cache_item_key in self.disk_cache:
             return self.disk_cache[cache_item_key]
         
-        vid_embed = self.video_encoder(video_path)
+        vid_embed = self.video_encoder(video_path, subvideo_start_frame=subvideo_start_frame, subvideo_end_frame=subvideo_end_frame)
         
         if self.disk_cache is not None:
             self.disk_cache[cache_item_key] = vid_embed
@@ -118,19 +132,21 @@ class SimilarityVLM(ABC):
         return vid_embed
 
     @abstractmethod
-    def text_encoder(self, text):
+    def text_encoder(self, text: str) -> np.ndarray:
         """
         Tokenize and encode text into a joint text/video embedding space
-        :param tokens:
+        :param text:
         :return:
         """
         pass
 
     @abstractmethod
-    def video_encoder(self, video_path):
+    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
         """
         Load, transform and encode a video file into a joint text/video embedding space
         :param video:
+        :param subvideo_start_frame:
+        :param subvideo_end_frame:
         :return:
         """
         pass
