@@ -1,6 +1,6 @@
 # Assuming in vlm_benchmark/frozen
 # Environment setup
-git clone https://github.com/m-bain/frozen-in-time.git
+git clone https://github.com/zanedurante/frozen-in-time
 cd frozen-in-time
 conda env create
 conda activate frozen
