@@ -158,18 +158,71 @@ def append_test_result(results: pd.DataFrame,
     results.loc[len(results)] = formatted_row
     return results
 
-def extract_test_result_sequence(results: pd.DataFrame,
-                                 x_column: str, y_column: str = "accuracy",
-                                 filter: dict = {}) -> pd.DataFrame:
+def optimize_hyperparameters(results: pd.DataFrame,
+                             hyperparam_cols: list,
+                             average_over_cols: list = ["n_way", "n_support"],
+                             target_cols: list = ["accuracy", "accuracy_std"],
+                             val_split: str = "val",
+                             test_split: str = "test") -> pd.DataFrame:
+    """Given a results dataframe which covers multiple splits of the same dataset, and a choice
+    of hyperparameter columns to optimize, returns a results dataframe only containing datapoints
+    from the test split which use the hyperparameter selections which performed best in the val split,
+    for each specific test. All columns not mentioned in one of the arguments are used as test specifiers,
+    meaning optimal hyperparameters are found for each unique value of the test specifiers, and only applied
+    if that unique value of test specifiers (and optimal hyperparameters) also exists in the test set.
+
+    Args:
+        results (pd.DataFrame): Full test results dataframe.
+        hyperparam_cols (list): Columns from which the best performing values per specific test are chosen.
+        average_over_cols (list, optional): Columns which will be averaged over before computing performance of difference hyperparameter values. Defaults to ["n_way", "n_support"].
+        target_cols (list, optional): Columns which specify the output of a test, rather than an input parameter. Defaults to ["accuracy", "accuracy_std"].
+        val_split (str, optional): The dataset split to use to compute the best hyperparameters. Defaults to "val".
+        test_split (str, optional): The dataset split to which the optimal hyperparameters are applied. Defaults to "test".
+
+    Returns:
+        pd.DataFrame: Results dataframe filtered to contain only test split results which use the hyperparameters which performed best on the val set.
+    """
+    hyperparam_cols = [col for col in hyperparam_cols if col in results.columns]
+    average_over_cols = [col for col in average_over_cols if col in results.columns]
+    target_cols = [col for col in target_cols if col in results.columns]
+    group_by_cols = [col for col in results.columns if col not in average_over_cols + hyperparam_cols + target_cols]
     
-    filtered_indices = np.ones(len(results)).astype(bool)
-    for filter_col, filter_val_list in filter.items():
-        if filter_col not in results.columns:
+    grouped_results = results\
+        .groupby(group_by_cols + hyperparam_cols, as_index=False, dropna=False).agg({col: np.mean for col in target_cols})\
+        .sort_values("accuracy", ascending=False).drop_duplicates(group_by_cols)
+
+    output = pd.DataFrame(columns=results.columns)
+    for i in grouped_results.index:
+        row = grouped_results.loc[i]
+        
+        if row["dataset"].split(".")[1] != val_split:
             continue
         
-        valid_col_indices = np.zeros(len(results)).astype(bool)
-        for filter_val in filter_val_list:
-            valid_col_indices = valid_col_indices | (results[filter_col] == filter_val)
-        filtered_indices = filtered_indices & valid_col_indices
-    
-    return results[filtered_indices].sort_values(x_column).groupby([col for col in results if col not in [x_column, y_column]], as_index=False, dropna=False).agg(list)
+        # Find all rows corresponding to the test-dataset version of this group, and then further select the correct hyperparams
+        filtered_results = results
+        for col in group_by_cols + hyperparam_cols:
+            if col == "dataset":
+                val = row["dataset"].split(".")[0] + "." + test_split
+            else:
+                val = row[col]
+
+            if pd.isna(val):
+                filtered_results = filtered_results[pd.isna(filtered_results[col])]
+            else:
+                filtered_results = filtered_results[filtered_results[col] == val]
+
+        for j in filtered_results.index:
+            output.loc[len(output)] = filtered_results.loc[j]
+
+    # When n_support is 0, text_weight is fixed to 1, even though the datapoint is effectively valid for any text_weight line.
+    # If the selected results contain no n_support = 0 points, attempt to find corresponding ones, relabel their text weights, and add them
+    if "classifier.text_weight" in hyperparam_cols and "n_support" not in group_by_cols and (output["n_support"] == 0).sum() == 0:
+        line_identifiers = output.drop_duplicates(group_by_cols + hyperparam_cols).drop(columns=target_cols + average_over_cols)
+        line_identifiers = line_identifiers.drop(columns=["classifier.text_weight"])
+        line_identifiers.loc[:, "n_support"] = 0
+        
+        additional_results = pd.merge(results, line_identifiers)
+        for j in additional_results.index:
+            output.loc[len(output)] = additional_results.loc[j]
+            
+    return output
