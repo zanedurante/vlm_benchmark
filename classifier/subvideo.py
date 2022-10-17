@@ -72,17 +72,16 @@ class SubVideoAverageFewShotClassifier(FewShotClassifier):
         support_video_paths (np.array):     Array of support video paths for each given few-shot category.
                                             Shape = (n_way, n_support).
                                             Can be None if n_support == 0.
-        query_video_paths (np.array):       Array of query video paths to be predicted, associated with each
-                                            given category.
-                                            Shape = (n_way, n_query).
+        query_video_paths (np.array):       Array of query video paths to be predicted.
+                                            Shape = (n_predict,).
     Returns:
         (np.array):                         Predicted category index (with respect to the first index of the given
                                             category names and support videos) for each query video path.
-                                            Shape = (n_way, n_query).
+                                            Shape = (n_predict,).
     '''
     def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray) -> np.ndarray:
         n_way = category_names.shape[0]
-        n_query = query_video_paths.shape[1]
+        n_predict = query_video_paths.shape[0]
         if support_video_paths is not None:
             n_support = support_video_paths.shape[1]
         else:
@@ -123,8 +122,8 @@ class SubVideoAverageFewShotClassifier(FewShotClassifier):
         prototype_embeds = np.array(prototype_embeds)
         
         # Collect subvideo embeds for each query video path, check similarity to prototypes and vote
-        flat_query_predictions = []
-        for query_video_path in query_video_paths.flatten():
+        query_predictions = []
+        for query_video_path in query_video_paths:
             subvid_embeds = np.array(self.get_subvideo_embeds(query_video_path))
             subvid_to_proto_similarities = self.metric(subvid_embeds, prototype_embeds)
             
@@ -136,9 +135,9 @@ class SubVideoAverageFewShotClassifier(FewShotClassifier):
             prediction_values, prediction_counts = np.unique(subvid_predictions, return_counts=True)
             prediction = prediction_values[np.argmax(prediction_counts)]
             
-            flat_query_predictions.append(prediction)
+            query_predictions.append(prediction)
             
-        return np.array(flat_query_predictions).reshape(n_way, n_query)
+        return np.array(query_predictions)
     
     @lru_cache(maxsize=MEM_CACHE_SIZE)
     def get_video_metadata(self, video_path: str) -> Tuple[int, float]:

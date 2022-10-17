@@ -58,24 +58,22 @@ class NearestNeighborFewShotClassifier(FewShotClassifier):
         support_video_paths (np.array):     Array of support video paths for each given few-shot category.
                                             Shape = (n_way, n_support).
                                             Can be None if n_support == 0.
-        query_video_paths (np.array):       Array of query video paths to be predicted, associated with each
-                                            given category.
-                                            Shape = (n_way, n_query).
+        query_video_paths (np.array):       Array of query video paths to be predicted.
+                                            Shape = (n_predict,).
     Returns:
         (np.array):                         Predicted category index (with respect to the first index of the given
                                             category names and support videos) for each query video path.
-                                            Shape = (n_way, n_query).
+                                            Shape = (n_predict,).
     '''
     def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray) -> np.ndarray:
         n_way = category_names.shape[0]
-        n_query = query_video_paths.shape[1]
+        n_predict = query_video_paths.shape[0]
         if support_video_paths is not None:
             n_support = support_video_paths.shape[1]
         else:
             n_support = 0
         
-        flat_query_embeds = np.vstack([self.vlm.get_video_embeds(vid) for vid in query_video_paths.flatten()])
-        query_embeds = flat_query_embeds.reshape(n_way, n_query, -1)
+        query_embeds = np.array([self.vlm.get_video_embeds(vid) for vid in query_video_paths])
         
         # Collect all support example embeddings (text embeds followed by n_support video embeds)
         support_embeds = [] # Each element should have shape (n_way, n_supporting_embeds, embed_dim)
@@ -104,7 +102,6 @@ class NearestNeighborFewShotClassifier(FewShotClassifier):
         knn.fit(flat_support_embeds, flat_support_category_inds)
         
         # Predict for query embeds
-        flat_query_predictions = knn.predict(flat_query_embeds)
-        query_predictions = flat_query_predictions.reshape(n_way, n_query)
+        query_predictions = knn.predict(query_embeds)
         
         return query_predictions

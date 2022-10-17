@@ -49,13 +49,12 @@ class HardPromptFewShotClassifier(WeightedTextFewShotClassifier):
         support_video_paths (np.array):     Array of support video paths for each given few-shot category.
                                             Shape = (n_way, n_support).
                                             Can be None if n_support == 0.
-        query_video_paths (np.array):       Array of query video paths to be predicted, associated with each
-                                            given category.
-                                            Shape = (n_way, n_query).
+        query_video_paths (np.array):       Array of query video paths to be predicted.
+                                            Shape = (n_predict,).
     Returns:
         (np.array):                         Predicted category index (with respect to the first index of the given
                                             category names and support videos) for each query video path.
-                                            Shape = (n_way, n_query).
+                                            Shape = (n_predict,).
     '''
     def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray) -> np.ndarray:
         if self.prompt_text != "":

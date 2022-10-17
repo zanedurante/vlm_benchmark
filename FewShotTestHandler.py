@@ -30,7 +30,7 @@ class FewShotTestHandler:
             self.results = pd.DataFrame()
 
     def run_few_shot_test(self, classifier: FewShotClassifier, dataset: DatasetHandler,
-                          n_way: int, n_support: int, n_query: int = 1, n_episodes: int = 1000,
+                          n_way: int, n_support: int, n_query: Optional[int] = None, n_episodes: int = 1000,
                           ) -> None:
         """Runs the given few-shot test if it has not already been performed,
         saving the accuracy.
@@ -40,7 +40,7 @@ class FewShotTestHandler:
             dataset (DatasetHandler): Dataset Handler to build few-shot tasks from
             n_way (int): Number of categories per few-shot task
             n_support (int): Number of example videos per category per few-shot task
-            n_query (int, optional): Number of videos predicted per category per few-shot task
+            n_query (Optional[int], optional): Number of videos predicted per category per few-shot task. If None, uses all videos not in support set. Defaults to None.
             n_episodes (int, optional): Number of few-shot tasks to sample. Defaults to 1000.
         """
         
@@ -55,23 +55,17 @@ class FewShotTestHandler:
         total_queries = 0
         total_correct = 0
         dataset_iter = tqdm(few_shot_dataset, leave=False)
-        for vid_paths, category_names in dataset_iter:
-            
-            query_vid_paths = vid_paths[:, n_support:]
-            if n_support > 0:
-                support_vid_paths = vid_paths[:, :n_support]
-            else:
-                support_vid_paths = None
+        for category_names, support_vid_paths, query_vid_paths, query_vid_labels in dataset_iter:
                 
             query_predictions = classifier.predict(category_names, support_vid_paths, query_vid_paths)
             
             # Compute accuracy for this sampled task
-            correct_predictions = np.sum(query_predictions == np.arange(n_way)[:, None])
-            task_accuracy = correct_predictions / (n_way * n_query)
+            correct_predictions = np.sum(query_predictions == query_vid_labels)
+            task_accuracy = correct_predictions / len(query_vid_paths)
             task_accuracies.append(task_accuracy)
             
             # Aggregate for accuracy over all sampled tasks
-            total_queries += n_way * n_query
+            total_queries += len(query_vid_paths)
             total_correct += correct_predictions
             dataset_iter.set_postfix({"accuracy": total_correct / total_queries})
         
