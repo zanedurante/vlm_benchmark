@@ -66,7 +66,7 @@ class GaussianFewShotClassifier(FewShotClassifier):
     '''
     def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray) -> np.ndarray:
         n_way = category_names.shape[0]
-        n_predict = query_video_paths.shape[1]
+        n_predict = query_video_paths.shape[0]
         if support_video_paths is not None:
             n_support = support_video_paths.shape[1]
         else:

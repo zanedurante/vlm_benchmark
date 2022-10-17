@@ -69,6 +69,9 @@ class FewShotTestHandler:
             total_correct += correct_predictions
             dataset_iter.set_postfix({"accuracy": total_correct / total_queries})
         
+        # TODO: Look into other error/confidence-bound measures we should save
+        # - Uncertainty in performance given a particular set of support videos (decreases with number of queries)
+        # - Uncertainty in performance over a variety of support videos (decreases with number of sampled tasks (n_episodes))
         accuracy = total_correct / total_queries
         accuracy_std = np.std(task_accuracies)
         
@@ -112,6 +115,10 @@ def dataframe_format(classifier: FewShotClassifier, dataset: DatasetHandler,
         
     if accuracy_std is not None:
         row["accuracy_std"] = accuracy_std
+        
+    for key, val in row.items():
+        if val is None:
+            row[key] = np.nan 
 
     return row
 
@@ -123,7 +130,10 @@ def test_already_stored(results: pd.DataFrame,
     for key, val in dataframe_format(classifier, dataset, n_way, n_support, n_query, n_episodes).items():
         if key not in results.columns:
             return False
-        valid_indices = valid_indices & (results[key] == val)
+        if pd.isna(val):
+            valid_indices = valid_indices & pd.isna(results[key])
+        else:
+            valid_indices = valid_indices & (results[key] == val)
     
     return np.any(valid_indices)
         
@@ -189,14 +199,16 @@ def optimize_hyperparameters(results: pd.DataFrame,
     for i in grouped_results.index:
         row = grouped_results.loc[i]
         
-        if row["dataset"].split(".")[1] != val_split:
+        if row["dataset"].split(".")[2] != val_split:
             continue
         
         # Find all rows corresponding to the test-dataset version of this group, and then further select the correct hyperparams
         filtered_results = results
         for col in group_by_cols + hyperparam_cols:
             if col == "dataset":
-                val = row["dataset"].split(".")[0] + "." + test_split
+                dataset_id_fields = row["dataset"].split(".")
+                dataset_id_fields[2] = test_split
+                val = ".".join(dataset_id_fields)
             else:
                 val = row[col]
 

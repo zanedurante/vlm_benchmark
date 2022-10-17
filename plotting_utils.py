@@ -65,19 +65,22 @@ def column_value_formatter(col: str, val: Any) -> str:
     if col == "dataset":
         val = val.split(".")
         name = val[0]
-        split = val[1]
-        if len(val) == 2:
+        split_type = val[1]
+        split = val[2]
+        if len(val) == 3:
             class_limit = None
         else:
-            class_limit = val[2]
+            class_limit = val[3]
             
         transform = {
             "kinetics_100": "Kinetics-100",
+            "smsm": "Something-Something-v2",
             "moma_act": "MOMA Activity",
             "moma_sact": "MOMA Sub-Activity"
         }
         
         result = transform.get(name, name)
+        result += f" ({split_type})"
         if split != "all":
             result += f" ({split})"
         if class_limit is not None:
