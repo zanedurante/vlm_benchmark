@@ -3,9 +3,9 @@ from typing import Optional
 import json, itertools
 import numpy as np
 from tqdm.autonotebook import tqdm
+import torch
 
 from SimilarityVLM import SimilarityVLM
-from .dataset_types import SequentialVideoDataset, SequentialCategoryNameDataset, FewShotTaskDataset
 
 
 '''
@@ -22,6 +22,52 @@ MOMA_REPO = os.path.join(FILE_DIR, "moma")
 KINETICS_100_DIR = "/home/datasets/kinetics_100"
 SMSM_DIR = "/home/datasets/smsm_cmn"
 MOMA_DIR = "/home/datasets/moma"
+
+
+
+'''
+Simple dataset for filling video embedding caches.
+This just iterates through all videos referenced in the given dataset split.
+Each element is a single video, referenced as a file path.
+'''
+class SequentialVideoDataset(torch.utils.data.Dataset):
+    '''
+    Args:
+        data_dict ({str -> [str]}): Dictionary from class names to lists of video paths in that class.
+    '''
+    def __init__(self, data_dict: dict) -> None:
+        super().__init__()
+        
+        self.video_paths = list(itertools.chain(*data_dict.values()))
+    
+    def __getitem__(self, i):
+        return self.video_paths[i]
+    
+    def __len__(self):
+        return len(self.video_paths)
+    
+
+'''
+Simple dataset for filling text embedding caches.
+This just iterates through all videos referenced in the given dataset split.
+'''
+class SequentialCategoryNameDataset(torch.utils.data.Dataset):
+    '''
+    Args:
+        data_dict ({str -> [str]}): Dictionary from class names to lists of video paths in that class.
+    '''
+    def __init__(self, data_dict: dict) -> None:
+        super().__init__()
+        
+        self.category_names = list(data_dict.keys())
+    
+    def __getitem__(self, i):
+        return self.category_names[i]
+    
+    def __len__(self):
+        return len(self.category_names)
+
+
 
 class DatasetHandler:
     def __init__(self, name: str, split: str = "val", split_type: str = "video", class_limit: Optional[int] = None):
@@ -145,34 +191,12 @@ class DatasetHandler:
     def video_count(self) -> int:
         return sum(len(vids) for vids in self.data_dict.values())
     
-    def valid_for_few_shot(self, n_way: int, n_support: int, n_query: Optional[int]) -> bool:
-        """Check whether the dataset has enough categories with enough examples to successfully sample
-        few-shot tasks with the given parameters.
-
-        Args:
-            n_way (int): _description_
-            n_support (int): _description_
-            n_query (Optional[int]): _description_
-
-        Returns:
-            bool: _description_
-        """
-        min_category_vids = n_support + (n_query or 1)
-        valid_category_count = sum(
-            len(videos) >= min_category_vids
-            for videos in self.data_dict.values()
-        )
-        return valid_category_count >= n_way
-    
     
     def sequential_video(self) -> SequentialVideoDataset:
         return SequentialVideoDataset(self.data_dict)
     
     def sequential_category_name(self) -> SequentialCategoryNameDataset:
         return SequentialCategoryNameDataset(self.data_dict)
-    
-    def few_shot(self, n_episodes: int, n_way: int, n_support: int, n_query: Optional[int]) -> FewShotTaskDataset:
-        return FewShotTaskDataset(self.data_dict, n_episodes, n_way, n_support, n_query)
     
     def fill_cache(self, vlm: SimilarityVLM) -> None:
         """Triggers the given vlm to generate embeddings for every video and text referenced

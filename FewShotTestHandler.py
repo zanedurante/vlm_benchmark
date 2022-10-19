@@ -7,7 +7,7 @@ import json
 
 from SimilarityVLM import SimilarityVLM
 from classifier import FewShotClassifier
-from dataset import DatasetHandler
+from dataset import DatasetHandler, FewShotTaskDataset
 
 
 
@@ -29,7 +29,7 @@ class FewShotTestHandler:
         else:
             self.results = pd.DataFrame()
 
-    def run_few_shot_test(self, classifier: FewShotClassifier, dataset: DatasetHandler,
+    def run_few_shot_test(self, classifier: FewShotClassifier, query_dataset: DatasetHandler, support_dataset: DatasetHandler,
                           n_way: int, n_support: int, n_query: Optional[int] = None, n_episodes: int = 1000,
                           ) -> None:
         """Runs the given few-shot test if it has not already been performed,
@@ -37,7 +37,8 @@ class FewShotTestHandler:
 
         Args:
             classifier (FewShotClassifier): Few-Shot video classifier built on top of an arbitrary SimilarityVLM
-            dataset (DatasetHandler): Dataset Handler to build few-shot tasks from
+            query_dataset (DatasetHandler): Dataset Handler to draw queries from
+            support_dataset (DatasetHandler): Dataset Handler to draw support videos from. Can be the same as query_dataset
             n_way (int): Number of categories per few-shot task
             n_support (int): Number of example videos per category per few-shot task
             n_query (Optional[int], optional): Number of videos predicted per category per few-shot task. If None, uses all videos not in support set. Defaults to None.
@@ -45,11 +46,15 @@ class FewShotTestHandler:
         """
         
         # Skip test if it already exists
-        if test_already_stored(self.results, classifier, dataset, n_way, n_support, n_query, n_episodes):
+        if test_already_stored(self.results, classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes):
             return
         
         # Load dataset to generate tasks with the desired params
-        few_shot_dataset = dataset.few_shot(n_episodes, n_way, n_support, n_query)
+        try:
+            few_shot_dataset = FewShotTaskDataset(query_dataset, support_dataset, n_episodes, n_way, n_support, n_query)
+        except ValueError:
+            # Skip invalid tests (if dataset too small, etc)
+            return
         
         task_accuracies = []
         total_queries = 0
@@ -76,7 +81,7 @@ class FewShotTestHandler:
         accuracy_std = np.std(task_accuracies)
         
         # Add to test results and save
-        self.results = append_test_result(self.results, classifier, dataset, n_way, n_support, n_query, n_episodes, accuracy, accuracy_std)
+        self.results = append_test_result(self.results, classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes, accuracy, accuracy_std)
         if self.test_results_path is not None:
             self.results.to_csv(self.test_results_path, index=False)
         
@@ -89,13 +94,14 @@ class FewShotTestHandler:
 Test Results DataFrame Utilities
 '''
 
-def dataframe_format(classifier: FewShotClassifier, dataset: DatasetHandler,
+def dataframe_format(classifier: FewShotClassifier, query_dataset: DatasetHandler, support_dataset: DatasetHandler,
                      n_way: int, n_support: int, n_query: int, n_episodes: int,
                      accuracy: Optional[float] = None, accuracy_std: Optional[float] = None) -> dict:
     row = {
         "vlm_class": classifier.vlm.__class__.__name__,
         "classifier_class": classifier.__class__.__name__,
-        "dataset": dataset.id(),
+        "query_dataset": query_dataset.id(),
+        "support_dataset": support_dataset.id(),
         "n_way": n_way,
         "n_support": n_support,
         "n_query": n_query,
@@ -123,11 +129,11 @@ def dataframe_format(classifier: FewShotClassifier, dataset: DatasetHandler,
     return row
 
 def test_already_stored(results: pd.DataFrame,
-                        classifier: FewShotClassifier, dataset: DatasetHandler,
+                        classifier: FewShotClassifier, query_dataset: DatasetHandler, support_dataset: DatasetHandler,
                         n_way: int, n_support: int, n_query: int, n_episodes: int) -> bool:
 
     valid_indices = np.ones(len(results)).astype(bool)
-    for key, val in dataframe_format(classifier, dataset, n_way, n_support, n_query, n_episodes).items():
+    for key, val in dataframe_format(classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes).items():
         if key not in results.columns:
             return False
         if pd.isna(val):
@@ -139,11 +145,11 @@ def test_already_stored(results: pd.DataFrame,
         
 
 def append_test_result(results: pd.DataFrame,
-                       classifier: FewShotClassifier, dataset: DatasetHandler,
+                       classifier: FewShotClassifier, query_dataset: DatasetHandler, support_dataset: DatasetHandler,
                        n_way: int, n_support: int, n_query: int, n_episodes: int,
                        accuracy: float, accuracy_std: float) -> pd.DataFrame:
     
-    formatted_row = dataframe_format(classifier, dataset, n_way, n_support, n_query, n_episodes, accuracy, accuracy_std)
+    formatted_row = dataframe_format(classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes, accuracy, accuracy_std)
     
     # Check if any new columns need to be added (new vlm/classifier-specific params)
     new_columns = set(formatted_row.keys()) - set(results.columns)
@@ -156,7 +162,7 @@ def append_test_result(results: pd.DataFrame,
         sorted_vlm_param_columns = sorted(col for col in results.columns if "vlm." in col)
         sorted_classifier_param_columns = sorted(col for col in results.columns if "classifier." in col)
         sorted_columns = ["vlm_class"] + sorted_vlm_param_columns + ["classifier_class"] + sorted_classifier_param_columns + \
-                         ["dataset", "n_way", "n_support", "n_query", "n_episodes", "accuracy", "accuracy_std"]
+                         ["query_dataset", "support_dataset", "n_way", "n_support", "n_query", "n_episodes", "accuracy", "accuracy_std"]
         results = results.reindex(columns=sorted_columns)
         
     results.loc[len(results)] = formatted_row
@@ -199,14 +205,14 @@ def optimize_hyperparameters(results: pd.DataFrame,
     for i in grouped_results.index:
         row = grouped_results.loc[i]
         
-        if row["dataset"].split(".")[2] != val_split:
+        if row["query_dataset"].split(".")[2] != val_split:
             continue
         
         # Find all rows corresponding to the test-dataset version of this group, and then further select the correct hyperparams
         filtered_results = results
         for col in group_by_cols + hyperparam_cols:
-            if col == "dataset":
-                dataset_id_fields = row["dataset"].split(".")
+            if col == "query_dataset":
+                dataset_id_fields = row["query_dataset"].split(".")
                 dataset_id_fields[2] = test_split
                 val = ".".join(dataset_id_fields)
             else:

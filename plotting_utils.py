@@ -62,7 +62,7 @@ def column_value_formatter(col: str, val: Any) -> str:
         }
         return transform.get(val, val)
     
-    if col == "dataset":
+    if col == "query_dataset":
         val = val.split(".")
         name = val[0]
         split_type = val[1]
