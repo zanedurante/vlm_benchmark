@@ -168,6 +168,41 @@ def append_test_result(results: pd.DataFrame,
     results.loc[len(results)] = formatted_row
     return results
 
+def find_hyperparameters(results: pd.DataFrame,
+                         hyperparam_cols: list,
+                         average_over_cols: list = ["n_way", "n_support"],
+                         target_cols: list = ["accuracy", "accuracy_std"],
+                         val_split: str = "val") -> pd.DataFrame:
+    """Finds the best hyperparameter values which maximize accuracy in the given val_split.
+    Returns a dataframe containing those hyperparameter values for each unique set of test parameters.
+    Unlike optimize_hyperparameters, it doesn't then select the corresponding results from a test split,
+    it just returns the values of the best hyperparameters.
+
+    Args:
+        results (pd.DataFrame): Full test results dataframe.
+        hyperparam_cols (list): Columns from which the best performing values per specific test are chosen.
+        average_over_cols (list, optional): Columns which will be averaged over before computing performance of difference hyperparameter values. Defaults to ["n_way", "n_support"].
+        target_cols (list, optional): Columns which specify the output of a test, rather than an input parameter. Defaults to ["accuracy", "accuracy_std"].
+        val_split (str, optional): The dataset split to use to compute the best hyperparameters. Defaults to "val".
+
+    Returns:
+        pd.DataFrame: DataFrame containing only the best hyperparameter values for each unique set of parameters in the given val split.
+    """
+    
+    hyperparam_cols = [col for col in hyperparam_cols if col in results.columns]
+    average_over_cols = [col for col in average_over_cols if col in results.columns]
+    target_cols = [col for col in target_cols if col in results.columns]
+    group_by_cols = [col for col in results.columns if col not in average_over_cols + hyperparam_cols + target_cols]
+    
+    # Filter to val split
+    results = results[results["query_dataset"].str.split(".", expand=True)[2] == val_split]
+    
+    grouped_results = results\
+        .groupby(group_by_cols + hyperparam_cols, as_index=False, dropna=False).agg({col: np.mean for col in target_cols})\
+        .sort_values("accuracy", ascending=False).drop_duplicates(group_by_cols).drop(columns=target_cols)
+        
+    return grouped_results
+
 def optimize_hyperparameters(results: pd.DataFrame,
                              hyperparam_cols: list,
                              average_over_cols: list = ["n_way", "n_support"],
