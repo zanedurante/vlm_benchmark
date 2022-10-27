@@ -14,12 +14,13 @@ from .base import FewShotClassifier
 Implementation of Tip-Adapter (https://arxiv.org/abs/2111.03930) for our framework.
 '''
 class TipAdapterFewShotClassifier(FewShotClassifier):
-    def __init__(self, vlm: SimilarityVLM, alpha: float, beta: float, finetune_epochs: int = 0, finetune_lr: float = 1e-3):
+    def __init__(self, vlm: SimilarityVLM, alpha: float, beta: float, finetune_epochs: int = 0, finetune_lr: float = 1e-3, weight_decay: float = 1e-2):
         self.vlm = vlm
         self.alpha = float(alpha)
         self.beta = float(beta)
         self.finetune_epochs = int(finetune_epochs)
         self.finetune_lr = float(finetune_lr)
+        self.weight_decay = float(weight_decay)
         
         if self.finetune_epochs == 0:
             self.finetune_lr = 0.0
@@ -34,7 +35,8 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
             "alpha": self.alpha,
             "beta": self.beta,
             "finetune_epochs": self.finetune_epochs,
-            "finetune_lr": self.finetune_lr
+            "finetune_lr": self.finetune_lr,
+            "weight_decay": self.weight_decay
         }
     
     '''
@@ -97,7 +99,7 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
             train_dataset = torch.utils.data.TensorDataset(flat_support_vid_embeds, flat_support_vid_labels)
             train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=256, num_workers=8, shuffle=True)
             
-            optimizer = torch.optim.AdamW(adapter_module.parameters(), lr=self.finetune_lr, eps=1e-4)
+            optimizer = torch.optim.AdamW(adapter_module.parameters(), lr=self.finetune_lr, eps=1e-4, weight_decay=self.weight_decay)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, self.finetune_epochs * len(train_dataloader))
             
             for epoch_idx in range(self.finetune_epochs):
@@ -132,11 +134,17 @@ class TipAdapterModule(nn.Module):
         self.cache_keys = nn.Parameter(flat_support_vid_embeds)
         
         # "Cache values", records the true class for each support video
-        self.cache_values = nn.Parameter(F.one_hot(flat_support_vid_labels, num_classes=text_embeds.shape[0]).float(), requires_grad=False)
+        self.register_buffer(
+            "cache_values",
+            F.one_hot(flat_support_vid_labels, num_classes=text_embeds.shape[0]).float()
+        )
         
         # "CLIP weights", for computing the similarity between query video embedding and class text embeddings
         # to produce the logits that would be applicable for zero-shot classification
-        self.text_embeds = nn.Parameter(text_embeds, requires_grad=False)
+        self.register_buffer(
+            "text_embeds",
+            text_embeds
+        )
         
     def forward(self, embeds: torch.tensor) -> torch.tensor:
         affinity = embeds @ self.cache_keys.T
