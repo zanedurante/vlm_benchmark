@@ -62,18 +62,29 @@ def column_value_formatter(col: str, val: Any) -> str:
         }
         return transform.get(val, val)
     
-    if col == "dataset":
-        name, split = val.split(".")
+    if col == "query_dataset":
+        val = val.split(".")
+        name = val[0]
+        split_type = val[1]
+        split = val[2]
+        if len(val) == 3:
+            class_limit = None
+        else:
+            class_limit = val[3]
             
         transform = {
             "kinetics_100": "Kinetics-100",
+            "smsm": "Something-Something-v2",
             "moma_act": "MOMA Activity",
             "moma_sact": "MOMA Sub-Activity"
         }
         
         result = transform.get(name, name)
+        result += f" ({split_type})"
         if split != "all":
             result += f" ({split})"
+        if class_limit is not None:
+            result += f" ({class_limit}-class)"
         return result
     
     if col == "n_way":
@@ -126,10 +137,8 @@ def plot(results: pd.DataFrame, x_col: str, y_col: str, plot_descriptor_cols: li
         results = aggregate(results, agg_col, agg_func)
     results = filter(results, post_agg_filter_dict)
     
-    sequence_columns = [x_col, y_col]
-    if "accuracy" in sequence_columns:
-        sequence_columns.append("accuracy_std")
-    grouped_results = group_into_sequence(results, sequence_columns)
+    # Group around all unique line identifiers (plot_descriptors + line_descriptors), then aggregate x_col and y_col into lists
+    grouped_results = results.sort_values(x_col).groupby(plot_descriptor_cols + line_descriptor_cols, as_index=False, dropna=False).agg(list)
     print(f"{len(grouped_results)} Overall Lines")
     
     if len(grouped_results) == 0:

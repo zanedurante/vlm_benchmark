@@ -1,10 +1,11 @@
 import os, sys
+from typing import Optional
 import json, itertools
 import numpy as np
 from tqdm.autonotebook import tqdm
+import torch
 
 from SimilarityVLM import SimilarityVLM
-from .dataset_types import SequentialVideoDataset, SequentialCategoryNameDataset, FewShotTaskDataset
 
 
 '''
@@ -22,14 +23,67 @@ KINETICS_100_DIR = "/home/datasets/kinetics_100"
 SMSM_DIR = "/home/datasets/smsm_cmn"
 MOMA_DIR = "/home/datasets/moma"
 
+
+
+'''
+Simple dataset for filling video embedding caches.
+This just iterates through all videos referenced in the given dataset split.
+Each element is a single video, referenced as a file path.
+'''
+class SequentialVideoDataset(torch.utils.data.Dataset):
+    '''
+    Args:
+        data_dict ({str -> [str]}): Dictionary from class names to lists of video paths in that class.
+    '''
+    def __init__(self, data_dict: dict) -> None:
+        super().__init__()
+        
+        self.video_paths = list(itertools.chain(*data_dict.values()))
+    
+    def __getitem__(self, i):
+        return self.video_paths[i]
+    
+    def __len__(self):
+        return len(self.video_paths)
+    
+
+'''
+Simple dataset for filling text embedding caches.
+This just iterates through all videos referenced in the given dataset split.
+'''
+class SequentialCategoryNameDataset(torch.utils.data.Dataset):
+    '''
+    Args:
+        data_dict ({str -> [str]}): Dictionary from class names to lists of video paths in that class.
+    '''
+    def __init__(self, data_dict: dict) -> None:
+        super().__init__()
+        
+        self.category_names = list(data_dict.keys())
+    
+    def __getitem__(self, i):
+        return self.category_names[i]
+    
+    def __len__(self):
+        return len(self.category_names)
+
+
+
 class DatasetHandler:
-    def __init__(self, name: str, split: str = "val"):
+    def __init__(self, name: str, split: str = "val", split_type: str = "video", class_limit: Optional[int] = None):
         self.name = name
         self.split = split
+        self.split_type = split_type
+        self.class_limit = class_limit
         
         if split not in ["train", "val", "test", "all"]:
             raise ValueError(f"Invalid dataset split: {split}")
         
+        if split_type not in ["class", "video"]:
+            raise ValueError(f"Invalid split type: {split_type}")
+        
+        if class_limit is not None and class_limit <= 0:
+            raise ValueError(f"Class limit must be positive or None. Got {class_limit}.")
         
         '''
         Populate self.data_dict.
@@ -49,14 +103,18 @@ class DatasetHandler:
             cls_folder_names = [f for f in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, f))]
             cls_folder_names.sort()
             
-            if split == "train":
-                class_indices = range(0, 64)
-            elif split == "val":
-                class_indices = range(64, 76)
-            elif split == "test":
-                class_indices = range(76, len(cls_folder_names))
-            elif split == "all":
+            if split_type == "class":
+                if split == "train":
+                    class_indices = range(0, 64)
+                elif split == "val":
+                    class_indices = range(64, 76)
+                elif split == "test":
+                    class_indices = range(76, len(cls_folder_names))
+                elif split == "all":
+                    class_indices = range(0, len(cls_folder_names))
+            elif split_type == "video":
                 class_indices = range(0, len(cls_folder_names))
+                
                 
             for i in class_indices:
                 cls_folder_name = cls_folder_names[i]
@@ -64,17 +122,31 @@ class DatasetHandler:
                 
                 cls_folder_path = os.path.join(dataset_dir, cls_folder_name)
                 category_video_paths = [
-                    os.path.join(cls_folder_path, f) for f in os.listdir(cls_folder_path)
+                    os.path.join(cls_folder_path, f) for f in sorted(os.listdir(cls_folder_path))
                     if os.path.isfile(os.path.join(cls_folder_path, f)) and f[0] != "."
                 ]
                 
-                self.data_dict[category_name] = category_video_paths
+                if split_type == "class":
+                    vid_indices = range(0, len(category_video_paths))
+                elif split_type == "video":
+                    train_len = int(0.7648 * len(category_video_paths))
+                    val_len = int(0.1122 * len(category_video_paths))
+                    if split == "train":
+                        vid_indices = range(0, train_len)
+                    elif split == "val":
+                        vid_indices = range(train_len, train_len + val_len)
+                    elif split == "test":
+                        vid_indices = range(train_len + val_len, len(category_video_paths))
+                    elif split == "all":
+                        vid_indices = range(0, len(category_video_paths))
+                
+                self.data_dict[category_name] = [category_video_paths[j] for j in vid_indices]
         
         elif name == "moma_act":
             sys.path.append(MOMA_REPO)
             from .moma.momaapi.moma import MOMA
             
-            moma = MOMA(MOMA_DIR, paradigm="few-shot")
+            moma = MOMA(MOMA_DIR, paradigm="few-shot" if split_type == "class" else "standard")
             cids = moma.get_cids(kind="act", threshold=1, split=split)
             category_names = moma.get_cnames(cids_act=cids)
             for category_name in category_names:
@@ -86,7 +158,7 @@ class DatasetHandler:
             sys.path.append(MOMA_REPO)
             from .moma.momaapi.moma import MOMA
             
-            moma = MOMA(MOMA_DIR, paradigm="few-shot")
+            moma = MOMA(MOMA_DIR, paradigm="few-shot" if split_type == "class" else "standard")
             cids = moma.get_cids(kind="sact", threshold=1, split=split)
             category_names = moma.get_cnames(cids_sact=cids)
             for category_name in category_names:
@@ -97,32 +169,27 @@ class DatasetHandler:
         else:
             raise ValueError(f"Unrecognized dataset name: {name}")
         
+        # Artificially limit the number of classes after the fact
+        if self.class_limit is not None and self.class_limit < len(self.data_dict):
+            for extra_class in list(self.data_dict.keys())[self.class_limit:]:
+                del self.data_dict[extra_class]
+        
     def id(self) -> str:
-        return f"{self.name}.{self.split}"
-    
+        if self.split_type == "class":
+            out = f"{self.name}.c.{self.split}"
+        else:
+            out = f"{self.name}.v.{self.split}"
+            
+        if self.class_limit is not None:
+            out += f".{self.class_limit}"
+            
+        return out
+            
     def category_count(self) -> int:
         return len(self.data_dict)
     
     def video_count(self) -> int:
         return sum(len(vids) for vids in self.data_dict.values())
-    
-    def valid_for_few_shot(self, n_way: int, n_support: int, n_query: int) -> bool:
-        """Check whether the dataset has enough categories with enough examples to successfully sample
-        few-shot tasks with the given parameters.
-
-        Args:
-            n_way (int): _description_
-            n_support (int): _description_
-            n_query (int): _description_
-
-        Returns:
-            bool: _description_
-        """
-        valid_category_count = sum(
-            len(videos) >= n_support + n_query
-            for videos in self.data_dict.values()
-        )
-        return valid_category_count >= n_way
     
     
     def sequential_video(self) -> SequentialVideoDataset:
@@ -130,9 +197,6 @@ class DatasetHandler:
     
     def sequential_category_name(self) -> SequentialCategoryNameDataset:
         return SequentialCategoryNameDataset(self.data_dict)
-    
-    def few_shot(self, n_episodes: int, n_way: int, n_support: int, n_query: int) -> FewShotTaskDataset:
-        return FewShotTaskDataset(self.data_dict, n_episodes, n_way, n_support, n_query)
     
     def fill_cache(self, vlm: SimilarityVLM) -> None:
         """Triggers the given vlm to generate embeddings for every video and text referenced

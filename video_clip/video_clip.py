@@ -131,70 +131,19 @@ class VideoClipVLM(SimilarityVLM):
             text_features = output["pooled_text"].numpy().squeeze()
         return text_features
 
-    def open_video(self, path):
+    def open_video(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
         """
         Opens video and returns basic, non-transformed video tensor
         Video model requires blocks of 1 second, 30 frame videos
-        :param path:
+        :param video:
+        :param subvideo_start_frame:
+        :param subvideo_end_frame:
         :return:
         """
-        video_reader = decord.VideoReader(path, num_threads=1)
-        native_fps = video_reader.get_avg_fps()
-        total_framecount_native = len(video_reader)
-
-        # Determine the length of the video window to focus on (in seconds/blocks)
-        # NOTE: Videos with duration < 1sec will be stretched as though they cover 1sec
-        focused_seconds = np.clip(int(total_framecount_native / native_fps), 1, self.num_seconds)
-        
-        # Extract self.num_seconds 1sec/30frame video blocks from the center of the total video duration
-        if self.sample_strat == "center":
-            # Calculate size of focus window in number of frames for both native fps and desired 30 fps
-            focused_framecount_native = math.ceil(native_fps * focused_seconds)
-            focused_framecount_desired = 30 * focused_seconds # Ensure input has multiple of 30 frames
-            
-            # Calculate start/end frame indices to sample in native fps
-            focus_start_native = max(total_framecount_native // 2 - focused_framecount_native // 2, 0)
-            focus_end_native = min(focus_start_native + focused_framecount_native, total_framecount_native)
-            
-            # Convert native frame indices to desired framerate
-            focus_frame_indices_desired = np.minimum(np.round(np.linspace(focus_start_native, focus_end_native, focused_framecount_desired, endpoint=False)), total_framecount_native - 1)
-            
-            video_tensor = video_reader.get_batch(focus_frame_indices_desired)
-            return video_tensor
-        
-        # Extract self.num_seconds 1sec/30frame video blocks from the start of the total video duration
-        if self.sample_strat == "start":
-            # Calculate size of focus window in number of frames for both native fps and desired 30 fps
-            focused_framecount_native = math.ceil(native_fps * focused_seconds)
-            focused_framecount_desired = 30 * focused_seconds # Ensure input has multiple of 30 frames
-            
-            # Calculate start/end frame indices to sample in native fps
-            focus_start_native = 0
-            focus_end_native = min(focused_framecount_native, total_framecount_native)
-            
-            # Convert native frame indices to desired framerate
-            focus_frame_indices_desired = np.minimum(np.round(np.linspace(focus_start_native, focus_end_native, focused_framecount_desired, endpoint=False)), total_framecount_native - 1)
-            
-            video_tensor = video_reader.get_batch(focus_frame_indices_desired)
-            return video_tensor
-        
-        # Collect self.num_seconds 1s/30frame blocks evenly spread throughout the video duration
-        if self.sample_strat == "spread":
-            block_frame_starts_native = np.round(np.linspace(0, total_framecount_native, focused_seconds, endpoint=False))
-            focus_frame_indices = []
-            for block_frame_start_ind in block_frame_starts_native:
-                block_frame_end_ind = min(block_frame_start_ind + native_fps, total_framecount_native)
-                block_frame_indices = np.minimum(
-                    np.round(np.linspace(block_frame_start_ind, block_frame_end_ind, 30, endpoint=False)),
-                    block_frame_end_ind - 1
-                )
-                focus_frame_indices += block_frame_indices.tolist()
-                
-            video_tensor = video_reader.get_batch(focus_frame_indices)
-            return video_tensor
-        
-        raise ValueError(f"Unrecognized sample strat: {self.sample_strat}")
-
+        video_reader = decord.VideoReader(video_path, num_threads=1)
+        video_len = len(video_reader)
+        video_fps = video_reader.get_avg_fps()
+        return video_reader.get_batch(self.sample_frame_indices(video_len, video_fps, subvideo_start_frame, subvideo_end_frame))
 
     def transform(self, video):
         """
@@ -208,13 +157,15 @@ class VideoClipVLM(SimilarityVLM):
         inputs = inputs.view(1, -1, 30, h, w, c)  # Add singleton batch dimension
         return inputs
 
-    def video_encoder(self, path):
+    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
         """
-        Encodes transformed video into joint text/video embedding space
-        :param path:
+        Load, transform and encode a video file into a joint text/video embedding space
+        :param video:
+        :param subvideo_start_frame:
+        :param subvideo_end_frame:
         :return:
         """
-        video = self.open_video(path)
+        video = self.open_video(video_path, subvideo_start_frame, subvideo_end_frame)
         video = self.transform(video)
 
         with torch.no_grad():
@@ -242,3 +193,60 @@ class VideoClipVLM(SimilarityVLM):
             Permute((1, 2, 3, 0)),
         ])
         return transforms
+
+    def sample_frame_indices(self, video_len: int, video_fps: float, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+        subvideo_start_frame = subvideo_start_frame or 0
+        subvideo_end_frame = subvideo_end_frame or video_len
+        
+        native_fps = video_fps
+        total_framecount_native = (subvideo_end_frame - subvideo_start_frame)
+        
+        # Determine the length of the video window to focus on (in seconds/blocks)
+        # NOTE: Videos with duration < 1sec will be stretched as though they cover 1sec
+        focused_seconds = np.clip(int(total_framecount_native / native_fps), 1, self.num_seconds)
+        
+        # Extract self.num_seconds 1sec/30frame video blocks from the center of the total video duration
+        if self.sample_strat == "center":
+            # Calculate size of focus window in number of frames for both native fps and desired 30 fps
+            focused_framecount_native = math.ceil(native_fps * focused_seconds)
+            focused_framecount_desired = 30 * focused_seconds # Ensure input has multiple of 30 frames
+            
+            # Calculate start/end frame indices to sample in native fps
+            focus_start_native = max(subvideo_start_frame + total_framecount_native // 2 - focused_framecount_native // 2, subvideo_start_frame)
+            focus_end_native = min(focus_start_native + focused_framecount_native, subvideo_end_frame)
+            
+            # Convert native frame indices to desired framerate
+            focus_frame_indices_desired = np.minimum(np.round(np.linspace(focus_start_native, focus_end_native, focused_framecount_desired, endpoint=False)), subvideo_end_frame - 1)
+            
+            return focus_frame_indices_desired
+        
+        # Extract self.num_seconds 1sec/30frame video blocks from the start of the total video duration
+        if self.sample_strat == "start":
+            # Calculate size of focus window in number of frames for both native fps and desired 30 fps
+            focused_framecount_native = math.ceil(native_fps * focused_seconds)
+            focused_framecount_desired = 30 * focused_seconds # Ensure input has multiple of 30 frames
+            
+            # Calculate start/end frame indices to sample in native fps
+            focus_start_native = subvideo_start_frame
+            focus_end_native = min(subvideo_start_frame + focused_framecount_native, subvideo_end_frame)
+            
+            # Convert native frame indices to desired framerate
+            focus_frame_indices_desired = np.minimum(np.round(np.linspace(focus_start_native, focus_end_native, focused_framecount_desired, endpoint=False)), subvideo_end_frame - 1)
+            
+            return focus_frame_indices_desired
+        
+        # Collect self.num_seconds 1s/30frame blocks evenly spread throughout the video duration
+        if self.sample_strat == "spread":
+            block_frame_starts_native = np.round(np.linspace(subvideo_start_frame, subvideo_end_frame, focused_seconds, endpoint=False))
+            focus_frame_indices = []
+            for block_frame_start_ind in block_frame_starts_native:
+                block_frame_end_ind = min(block_frame_start_ind + native_fps, subvideo_end_frame)
+                block_frame_indices = np.minimum(
+                    np.round(np.linspace(block_frame_start_ind, block_frame_end_ind, 30, endpoint=False)),
+                    block_frame_end_ind - 1
+                )
+                focus_frame_indices += block_frame_indices.tolist()
+                
+            return np.array(focus_frame_indices)
+        
+        raise ValueError(f"Unrecognized sample strat: {self.sample_strat}")

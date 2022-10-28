@@ -2,6 +2,7 @@ import numpy as np
 import decord
 import random
 import os
+from typing import Optional
 
 import torch
 from transformers import CLIPModel, CLIPTokenizer, CLIPProcessor
@@ -69,18 +70,20 @@ class ClipVLM(SimilarityVLM):
             text_features = self.model.get_text_features(**tokens).cpu().numpy()[0]
         return text_features
 
-    def video_encoder(self, video_path):
+    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
         """
         Load, transform and encode a video file into a joint text/video embedding space
         :param video:
+        :param subvideo_start_frame:
+        :param subvideo_end_frame:
         :return:
         """
         # Load
         # TODO: Figure out best way to subsample the video with CLIP (in the paper they just use one single frame)
         video_reader = decord.VideoReader(video_path, num_threads=1)
-        vlen = len(video_reader)
-        frame_idxs = self.get_frame_idxs(vlen)
-        frames = video_reader.get_batch(frame_idxs)
+        video_len = len(video_reader)
+        frame_indices = self.sample_frame_indices(video_len, subvideo_start_frame, subvideo_end_frame)
+        frames = video_reader.get_batch(frame_indices)
         frames = frames.float() / 255
         frames = frames.permute(0, 3, 1, 2)
         # Convert frame batch axis into list
@@ -104,21 +107,22 @@ class ClipVLM(SimilarityVLM):
         """
         return Similarity.COSINE
 
-    def get_frame_idxs(self, vlen):
-        # Determine number of samples
-        num_samples = min(self.num_frames, vlen)
-
-        # Determine intervals of indices to sample from (e.g. [0, 3, 6, 10] for num_frames=3, vlen=10)
-        intervals = np.linspace(start=0, stop=vlen, num=num_samples + 1).astype(int)
-        ranges = []
-        for idx, interval in enumerate(intervals[:-1]):
-            ranges.append((interval, intervals[idx + 1] - 1))
-        if self.sample_strat == 'rand':
-            frame_idxs = [random.choice(range(x[0], x[1])) for x in ranges]
-        elif self.sample_strat == 'uniform':
-            frame_idxs = [(x[0] + x[1]) // 2 for x in ranges]
+    def sample_frame_indices(self, video_len: int, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+        start_frame = subvideo_start_frame or 0
+        end_frame = subvideo_end_frame or video_len
+        
+        frame_indices = np.linspace(start_frame, end_frame, self.num_frames, endpoint=False)
+        
+        if self.sample_strat == "rand":
+            frame_indices += np.random.choice((end_frame - start_frame) // self.num_frames)
+        elif self.sample_strat == "uniform":
+            frame_indices += (end_frame - start_frame) / self.num_frames / 2
         else:
-            raise NotImplementedError
-
-        return frame_idxs
-
+            raise ValueError
+        
+        frame_indices = np.minimum(
+            np.round(frame_indices),
+            end_frame - 1
+        )
+        
+        return frame_indices

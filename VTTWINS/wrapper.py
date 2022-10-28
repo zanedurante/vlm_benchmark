@@ -1,6 +1,7 @@
 import importlib
 import numpy as np
 import os, sys
+import decord
 
 import torch
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -73,16 +74,28 @@ class VTTWINS_SimilarityVLM(SimilarityVLM):
 
         return embedding
     
-    def video_encoder(self, video_path):
+    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
         """
         Load, transform and encode a video file into a joint text/video embedding space
         :param video:
+        :param subvideo_start_frame:
+        :param subvideo_end_frame:
         :return:
         """
+        # Convert start/end bounds to seconds
+        video_reader = decord.VideoReader(video_path)
+        video_len = len(video_reader)
+        video_fps = video_reader.get_avg_fps()
+        
+        subvideo_start_frame = subvideo_start_frame or 0
+        subvideo_end_frame = subvideo_end_frame or video_len
+        
+        subvideo_start_time = subvideo_start_frame / video_fps
+        subvideo_end_time = subvideo_end_frame / video_fps
+        
         # Load and Preprocess
         # Loads a single video into multiple clips which will be individually encoded and averaged
-        duration = self.spoof_dataloader._get_duration(video_path)
-        video = self.spoof_dataloader._get_video(video_path, 0, float(duration), self.spoof_dataloader.num_clip)
+        video = self.spoof_dataloader._get_video(video_path, subvideo_start_time, subvideo_end_time, self.spoof_dataloader.num_clip)
         video /= 255
         
         # Encode

@@ -57,26 +57,24 @@ class GaussianFewShotClassifier(FewShotClassifier):
         support_video_paths (np.array):     Array of support video paths for each given few-shot category.
                                             Shape = (n_way, n_support).
                                             Can be None if n_support == 0.
-        query_video_paths (np.array):       Array of query video paths to be predicted, associated with each
-                                            given category.
-                                            Shape = (n_way, n_query).
+        query_video_paths (np.array):       Array of query video paths to be predicted.
+                                            Shape = (n_predict,).
     Returns:
         (np.array):                         Predicted category index (with respect to the first index of the given
                                             category names and support videos) for each query video path.
-                                            Shape = (n_way, n_query).
+                                            Shape = (n_predict,).
     '''
     def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray) -> np.ndarray:
         n_way = category_names.shape[0]
-        n_query = query_video_paths.shape[1]
+        n_predict = query_video_paths.shape[0]
         if support_video_paths is not None:
             n_support = support_video_paths.shape[1]
         else:
             n_support = 0
         
-        flat_query_embeds = np.vstack([self.vlm.get_video_embeds(vid) for vid in query_video_paths.flatten()])
+        query_embeds = np.vstack([self.vlm.get_video_embeds(vid) for vid in query_video_paths])
         if self.normalize:
-            flat_query_embeds /= np.linalg.norm(flat_query_embeds, axis=1, keepdims=True)
-        query_embeds = flat_query_embeds.reshape(n_way, n_query, -1)
+            query_embeds /= np.linalg.norm(query_embeds, axis=1, keepdims=True)
         
         # Create Category Prototypes (n_way, embed_dim)
         support_embeds = [] # Each element should have shape (n_way, n_supporting_embeds, embed_dim)
@@ -121,11 +119,10 @@ class GaussianFewShotClassifier(FewShotClassifier):
             vars = np.ones_like(vars)
         
         # Predict relative query likelihood under each gaussian class distribution
-        flat_query_log_likelihoods = np.sum(
-            -0.5 * np.log(vars[None, :, :]) - 0.5 * np.square(flat_query_embeds[:, None, :] - means[None, :, :]) / vars[None, :, :],
+        query_log_likelihoods = np.sum(
+            -0.5 * np.log(vars[None, :, :]) - 0.5 * np.square(query_embeds[:, None, :] - means[None, :, :]) / vars[None, :, :],
             axis=2
-        )   # Shape = (n_way * n_query, n_way)
+        )   # Shape = (n_predict, n_way)
         
-        flat_query_predictions = np.argmax(flat_query_log_likelihoods, axis=1)
-        query_predictions = flat_query_predictions.reshape(n_way, n_query)
+        query_predictions = np.argmax(query_log_likelihoods, axis=1)
         return query_predictions

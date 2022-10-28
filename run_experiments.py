@@ -76,7 +76,8 @@ if __name__ == "__main__":
     
     # During testing, save most recently loaded dataset for reuse
     # Assumes dataset params are in the outermost loop of the product / first in the PARAM_KEYS list
-    prev_dataset = None
+    query_dataset = None
+    train_dataset = None
     
     # Save which datasets have been explicitly cached (repeatedly running fill_cache is fast but still wasted time)
     datasets_in_cache = set()
@@ -87,25 +88,21 @@ if __name__ == "__main__":
         pbar.set_postfix(exp_params)
         
         # Load dataset
-        if prev_dataset is not None and prev_dataset.name == exp_params["dataset_name"] and prev_dataset.split == exp_params["dataset_split"]:
-            dataset = prev_dataset
-        else:
-            dataset = DatasetHandler(exp_params["dataset_name"], exp_params["dataset_split"])
+        if query_dataset is None or not (query_dataset.name == exp_params["dataset_name"] and query_dataset.split == exp_params["dataset_split"]):
+            query_dataset = DatasetHandler(exp_params["dataset_name"], exp_params["dataset_split"])
+            train_dataset = DatasetHandler(exp_params["dataset_name"], "train")
             
         # Fill vlm cache
-        if dataset.id() not in datasets_in_cache:
-            test_handler.fill_cache(vlm, dataset)
-            datasets_in_cache.add(dataset.id())
-            
-        # Skip if few-shot task params are too large for the dataset
-        if not dataset.valid_for_few_shot(exp_params["n_way"], exp_params["n_support"], exp_params["n_query"]):
-            continue
+        if query_dataset.id() not in datasets_in_cache:
+            query_dataset.fill_cache(vlm)
+            datasets_in_cache.add(query_dataset.id())
+        if train_dataset.id() not in datasets_in_cache:
+            train_dataset.fill_cache(vlm)
+            datasets_in_cache.add(train_dataset.id())
         
         # Construct classifier around vlm
         classifier = WeightedTextFewShotClassifier(vlm, text_weight=exp_params["text_weight"])
         
         # Run experiment
-        test_handler.run_few_shot_test(classifier, dataset, exp_params["n_way"], exp_params["n_support"],
+        test_handler.run_few_shot_test(classifier, query_dataset, train_dataset, exp_params["n_way"], exp_params["n_support"],
                                        exp_params["n_query"], exp_params["n_episodes"])
-        
-        prev_dataset = dataset

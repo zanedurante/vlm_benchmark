@@ -1,2 +1,2 @@
-from .dataset_handler import DatasetHandler
-from .dataset_types import SequentialVideoDataset, SequentialCategoryNameDataset, FewShotTaskDataset
+from .dataset_handler import DatasetHandler, SequentialVideoDataset, SequentialCategoryNameDataset
+from .few_shot_dataset import FewShotTaskDataset
