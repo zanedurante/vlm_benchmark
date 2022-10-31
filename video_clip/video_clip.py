@@ -46,12 +46,17 @@ class VideoClipVLM(SimilarityVLM):
         self.num_seconds = num_seconds
         self.sample_strat = sample_strat
         self.transforms = self.get_transforms()
+        decord.bridge.set_bridge("torch")  # Video loader
+                
+        # Do not load model, this is just dummy model to access methods
+        if path is None:
+            print("Dummy model loaded, no backbone or weights!")
+            return
         
         assert type(self.path) is str
         assert type(self.num_seconds) is int
         assert self.sample_strat in ["center", "start", "spread"]
 
-        decord.bridge.set_bridge("torch")  # Video loader
         
         # Load model
         self.load_model(path=self.path)
@@ -78,8 +83,12 @@ class VideoClipVLM(SimilarityVLM):
         :param path:
         :return:
         """
-        self.model = MMPTClassifier.from_pretrained(path, embed_extractor=True,
-                                                    ckpt_save_dir="video_clip/MMPT_updated/runs/retri/videoclip/",
+        print("PATH IS:", path) # /home/zaned/code/vlm_benchmark/video_clip/MMPT_updated/projects/retri/videoclip/how2.yaml
+        ckpt_save_dir=path[:path.rfind("/")] # Files stored in retri/videoclip repo
+        ckpt_save_dir = ckpt_save_dir.replace("projects", "runs")
+        print("CKPT SAVE DIR:", ckpt_save_dir) # /home/zaned/code/vlm_benchmark/video_clip/MMPT_updated/projects/retri/videoclip
+        # Target: /home/zaned/code/vlm_benchmark/video_clip/MMPT_updated/runs/retri/videoclip/checkpoint_best.pt
+        self.model = MMPTClassifier.from_pretrained(path, embed_extractor=True, ckpt_save_dir=ckpt_save_dir,
                                                     use_cuda=self.cuda)
 
         # Load random caps/cmasks for VideoCLIP so that video embeddings can be run without
@@ -90,8 +99,8 @@ class VideoClipVLM(SimilarityVLM):
         caps, cmasks = self.model.aligner._build_text_seq(
             self.model.tokenizer(random_text, add_special_tokens=False)["input_ids"])
         caps, cmasks = caps[None, :], cmasks[None, :]
-        self.model.caps = caps
-        self.model.cmasks = cmasks
+        self.model.caps = caps.to(DEVICE)
+        self.model.cmasks = cmasks.to(DEVICE)
         self.model.to(DEVICE)
 
         return
@@ -125,10 +134,14 @@ class VideoClipVLM(SimilarityVLM):
 
         random_video = np.zeros((1, 1, 30, 224, 224, 3))
         video_frames = torch.from_numpy(random_video).float()
+        if self.cuda:
+            video_frames = video_frames.to('cuda')
+            text_tokens = text_tokens.to('cuda')
+            text_mask = text_mask.to('cuda')
 
         with torch.no_grad():
             output = self.model.mmpt_model(video_frames, text_tokens, text_mask, return_score=False)
-            text_features = output["pooled_text"].numpy().squeeze()
+            text_features = output["pooled_text"].cpu().numpy().squeeze()
         return text_features
 
     def open_video(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
@@ -193,8 +206,23 @@ class VideoClipVLM(SimilarityVLM):
             Permute((1, 2, 3, 0)),
         ])
         return transforms
-
-    def sample_frame_indices(self, video_len: int, video_fps: float, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+    
+    def get_train_transforms(self):
+        # Input is T, H, W, C
+        # Change to (T, C, H, W) for RandAugment 
+        transforms = Compose([
+            Permute((0, 3, 1, 2)),
+            RandAugment(magnitude=7, num_layers=4),
+            # Change back to T, H, W, C
+            Permute(dims=(0, 2, 3, 1)),
+            Lambda(lambda x: x/255.0),
+            RandomResizedCrop(target_height=224, target_width=224, scale=(0.08, 1.0), aspect_ratio=(0.75, 1.3333)),
+            RandomHorizontalFlip(p=0.5),
+        ])
+        
+        return transforms
+    
+    def sample_frame_indices(self, video_len: int, video_fps: float, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, use_strat: Optional[str] = None) -> np.ndarray:
         subvideo_start_frame = subvideo_start_frame or 0
         subvideo_end_frame = subvideo_end_frame or video_len
         
@@ -205,8 +233,11 @@ class VideoClipVLM(SimilarityVLM):
         # NOTE: Videos with duration < 1sec will be stretched as though they cover 1sec
         focused_seconds = np.clip(int(total_framecount_native / native_fps), 1, self.num_seconds)
         
+        if not use_strat:
+            use_strat = self.sample_strat
+        
         # Extract self.num_seconds 1sec/30frame video blocks from the center of the total video duration
-        if self.sample_strat == "center":
+        if use_strat == "center":
             # Calculate size of focus window in number of frames for both native fps and desired 30 fps
             focused_framecount_native = math.ceil(native_fps * focused_seconds)
             focused_framecount_desired = 30 * focused_seconds # Ensure input has multiple of 30 frames
@@ -221,7 +252,7 @@ class VideoClipVLM(SimilarityVLM):
             return focus_frame_indices_desired
         
         # Extract self.num_seconds 1sec/30frame video blocks from the start of the total video duration
-        if self.sample_strat == "start":
+        if use_strat == "start":
             # Calculate size of focus window in number of frames for both native fps and desired 30 fps
             focused_framecount_native = math.ceil(native_fps * focused_seconds)
             focused_framecount_desired = 30 * focused_seconds # Ensure input has multiple of 30 frames
@@ -236,7 +267,7 @@ class VideoClipVLM(SimilarityVLM):
             return focus_frame_indices_desired
         
         # Collect self.num_seconds 1s/30frame blocks evenly spread throughout the video duration
-        if self.sample_strat == "spread":
+        if use_strat == "spread":
             block_frame_starts_native = np.round(np.linspace(subvideo_start_frame, subvideo_end_frame, focused_seconds, endpoint=False))
             focus_frame_indices = []
             for block_frame_start_ind in block_frame_starts_native:
