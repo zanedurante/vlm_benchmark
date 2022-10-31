@@ -12,7 +12,7 @@ from similarity_metrics import Similarity
 
 from torchvision.io import read_video
 from pytorchvideo.transforms import *
-from torchvision.transforms import Compose, Lambda, CenterCrop
+from torchvision.transforms import Compose, Lambda, CenterCrop, RandomHorizontalFlip
 
 import math
 import decord
@@ -46,6 +46,7 @@ class VideoClipVLM(SimilarityVLM):
         self.num_seconds = num_seconds
         self.sample_strat = sample_strat
         self.transforms = self.get_transforms()
+        self.train_transforms = self.get_train_transforms()
         decord.bridge.set_bridge("torch")  # Video loader
                 
         # Do not load model, this is just dummy model to access methods
@@ -213,11 +214,12 @@ class VideoClipVLM(SimilarityVLM):
         transforms = Compose([
             Permute((0, 3, 1, 2)),
             RandAugment(magnitude=7, num_layers=4),
-            # Change back to T, H, W, C
-            Permute(dims=(0, 2, 3, 1)),
             Lambda(lambda x: x/255.0),
             RandomResizedCrop(target_height=224, target_width=224, scale=(0.08, 1.0), aspect_ratio=(0.75, 1.3333)),
             RandomHorizontalFlip(p=0.5),
+            # Change back to T, H, W, C
+            Permute(dims=(0, 2, 3, 1)),
+
         ])
         
         return transforms
