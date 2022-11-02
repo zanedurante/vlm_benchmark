@@ -37,11 +37,13 @@ MODEL_ARGS = {
 INPUT_RES = 224
 EMBED_DIM = 256
 VIDEO_TOKEN_DIM = 768
-VIDEO_NUM_FRAME_PATCHES = (224 // 16)**2
-VIDEO_NUM_FRAMES = 4
+VIDEO_FRAME_PATCH_SIZE = 16
+VIDEO_NUM_FRAME_PATCHES = (224 // VIDEO_FRAME_PATCH_SIZE)**2
+VIDEO_TRAIN_NUM_FRAMES = 4 # Number of frames used for pretraining. Video encoder learned this many temporal embeddings
 
 # Given MILES eval config just uses the default transforms
-VIDEO_TRANSFORM = init_transform_dict()["test"]
+# 'test' transforms have no randomization, 'train' transforms have random resize crop, random horizontal flip, and random color jitter
+VIDEO_TRANSFORM_DICT = init_transform_dict()
 
 # Pretrained State
 PRETRAINED_CHECKPOINT_PATH = os.path.join(FILE_DIR, "pretrained/MILES.pth")
@@ -50,7 +52,9 @@ PRETRAINED_CHECKPOINT_PATH = os.path.join(FILE_DIR, "pretrained/MILES.pth")
 CACHE_NAME = "cache"
 
 class MILES_SimilarityVLM(SimilarityVLM):
-    def __init__(self, reset_cache: bool = False):
+    def __init__(self, num_frames: int = 4, reset_cache: bool = False):
+        self.num_frames = int(num_frames)
+        
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ARGS['text_params']['model'])
         self.model = MILES_ExposedTokens(**MODEL_ARGS)
         
@@ -64,68 +68,43 @@ class MILES_SimilarityVLM(SimilarityVLM):
         
         super().__init__(cache_file=os.path.join(FILE_DIR, CACHE_NAME), reset_cache=reset_cache)
         
+    def params(self) -> dict:
+        return {
+            "num_frames": self.num_frames
+        }
+        
     def embed_dim(self):
         return EMBED_DIM
     
     def video_token_dim(self):
         return VIDEO_TOKEN_DIM
     
+    def video_frame_patch_size(self):
+        return VIDEO_FRAME_PATCH_SIZE
+    
     def video_num_frame_patches(self):
         return VIDEO_NUM_FRAME_PATCHES
     
     def video_num_frames(self):
-        return VIDEO_NUM_FRAMES
+        return self.num_frames
     
-    def text_encoder_to_tokens(self, text: str) -> torch.Tensor:
-        """Converts a single text string into a 1-batch tensor of token embeddings and a corresponding attention mask.
-
-        Args:
-            text (str): _description_
-
-        Returns:
-            torch.Tensor: input token embeddings for the text encoder. Shape (batch = 1, sequence_len, token_dim)
-            torch.Tensor: input sequence attention mask for the text encoder. Shape (batch = 1, sequence_len)
-        """
-        inputs = self.tokenizer([text], return_tensors="pt", padding=True, truncation=True)
-        token_ids = inputs["input_ids"].to(DEVICE)
-        attn_mask = inputs["attention_mask"].to(DEVICE)
-        
-        # Convert token ids to token embeddings
-        token_embeds = self.model.text_model.get_input_embeddings()(token_ids)
-        
-        return token_embeds, attn_mask
-    
-    def text_encoder_from_tokens(self, token_embeds: torch.Tensor, attn_mask: torch.Tensor) -> torch.Tensor:
-        """Converts a batch of token embeddings and corresponding attention masks into a batch of text embeddings.
-
-        Args:
-            token_embeds (torch.Tensor): Shape (batch, sequence_len, token_dim)
-            attn_mask (torch.Tensor): Shape (batch, sequence_len)
-
-        Returns:
-            torch.Tensor: Shape (batch, embed_dim)
-        """
-        return self.model.compute_text_from_token_embeds(token_embeds=token_embeds, attn_mask=attn_mask)
-        
-        
     def text_encoder(self, text: str) -> np.ndarray:
         """
-        Tokenize and encode text into a joint text/video embedding space.
-        When doing this in one stage, gradients are disabled. As opposed to manually calling to_token and from_token stages.
+        Tokenize and encode text into a joint text/video embedding space
         :param text:
         :return:
         """
+        # Tokenize
+        inputs = self.tokenizer([text], return_tensors="pt", padding=True, truncation=True)
+        inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
+        
         # Process
         with torch.no_grad():
-            token_embeds, attn_mask = self.text_encoder_to_tokens(text)
-            text_embed = self.text_encoder_from_tokens(token_embeds, attn_mask)
-            
-        # Unbatch and move to cpu
-        text_embed = text_embed[0].cpu().numpy()
+            text_embed = self.model.compute_text(inputs)[0].cpu().numpy()
             
         return text_embed
 
-    def video_encoder_to_tokens(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> torch.Tensor:
+    def video_encoder_to_tokens(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_augment: bool = False) -> torch.Tensor:
         """Converts a single video into a 1-batch tensor of tokens in the internal model format.
 
         Args:
@@ -139,14 +118,17 @@ class MILES_SimilarityVLM(SimilarityVLM):
         # Load frames
         video_reader = decord.VideoReader(video_path, num_threads=1)
         video_len = len(video_reader)
-        frame_indices = self.sample_frame_indices(video_len, subvideo_start_frame, subvideo_end_frame)
+        frame_indices = self.sample_frame_indices(video_len, subvideo_start_frame, subvideo_end_frame, random_offset=random_augment)
         frames = video_reader.get_batch(frame_indices).asnumpy()
 
         # Transform
         frames = torch.from_numpy(frames).float() / 255
         frames = frames.permute(0, 3, 1, 2)
-        frames = VIDEO_TRANSFORM(frames)
-        video_input = torch.zeros(VIDEO_NUM_FRAMES, 3, INPUT_RES, INPUT_RES)
+        if random_augment:
+            frames = VIDEO_TRANSFORM_DICT["train"](frames)
+        else:
+            frames = VIDEO_TRANSFORM_DICT["test"](frames)
+        video_input = torch.zeros(self.num_frames, 3, INPUT_RES, INPUT_RES)
         video_input[:frames.shape[0]] = frames # Zero-pad frames to desired length
         video_input = video_input.unsqueeze(0)
         video_input = video_input.to(DEVICE)
@@ -155,19 +137,21 @@ class MILES_SimilarityVLM(SimilarityVLM):
         video_tokens = self.model.compute_video_to_tokens(video_input)
         return video_tokens
     
-    def video_encoder_from_tokens(self, video_tokens: torch.Tensor) -> torch.Tensor:
+    def video_encoder_from_tokens(self, video_tokens: torch.Tensor, prompt_tokens: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Converts a batch of video token tensors in internal model format into a batch of video embeddings
 
         Args:
-            video_tokens (torch.Tensor): video patch tokens in format (batch, frames, patches, token_dim)
+            video_tokens (torch.Tensor):                        Video patch tokens in format (batch, frames, patches, token_dim)
+            prompt_tokens (Optional[torch.Tensor], optional):   Optional token embeddings which will be inserted between [CLS] token
+                                                                and video tokens. Shape = (prompt_tokens, token_dim). Defaults to None.
 
         Returns:
             torch.Tensor: video embeddings in format (batch, embed_dim)
         """
-        video_embeds = self.model.compute_video_from_tokens(video_tokens)
+        video_embeds = self.model.compute_video_from_tokens(video_tokens, prompt_tokens)
         return video_embeds
 
-    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_augment: bool = False) -> np.ndarray:
         """
         Load, transform and encode a single video file into a joint text/video embedding space.
         When doing this in one stage, gradients are disabled. As opposed to manually calling to_token and from_token stages.
@@ -179,7 +163,7 @@ class MILES_SimilarityVLM(SimilarityVLM):
         
         # Process
         with torch.no_grad():
-            video_tokens = self.video_encoder_to_tokens(video_path, subvideo_start_frame, subvideo_end_frame)
+            video_tokens = self.video_encoder_to_tokens(video_path, subvideo_start_frame, subvideo_end_frame, random_augment)
             video_embed = self.video_encoder_from_tokens(video_tokens)
             
         # Unbatch and move to cpu
@@ -194,13 +178,21 @@ class MILES_SimilarityVLM(SimilarityVLM):
         """
         return Similarity.COSINE
     
-    def sample_frame_indices(self, video_len: int, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+    def sample_frame_indices(self, video_len: int, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_offset: bool = False) -> np.ndarray:
         start_frame = subvideo_start_frame or 0
         end_frame = subvideo_end_frame or video_len
             
+        # Number of frame indices between consecutive samples (if no random offset augmentation)
+        sample_width = (end_frame - start_frame) / self.num_frames
+        
+        if not random_offset:        
+            frame_index_offset = sample_width / 2
+        else:
+            frame_index_offset = np.random.uniform(0, sample_width, self.num_frames)
+            
         frame_indices = np.minimum(
             np.round(
-                np.linspace(start_frame, end_frame, VIDEO_NUM_FRAMES, endpoint=False) + (end_frame - start_frame) / (2 * VIDEO_NUM_FRAMES)
+                np.linspace(start_frame, end_frame, self.num_frames, endpoint=False) + frame_index_offset
             ),
             end_frame - 1
         )

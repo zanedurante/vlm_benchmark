@@ -1,3 +1,7 @@
+--- Initialize Submodules ---
+git submodule init
+
+
 --- Download Pretrained States ---
 
 mkdir pretrained
