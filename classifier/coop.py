@@ -14,12 +14,13 @@ from .base import FewShotClassifier
 Implementation of CoOp (https://arxiv.org/abs/2109.01134) for our framework.
 '''
 class CoopFewShotClassifier(FewShotClassifier):
-    def __init__(self, vlm: SimilarityVLM, context_len: int = 16, lr: float = 1e-3, epochs: int = 10):
+    def __init__(self, vlm: SimilarityVLM, context_len: int = 16, lr: float = 1e-3, epochs: int = 10, random_augment: bool = True):
         self.vlm = vlm
         
         self.context_len = int(context_len)
         self.lr = float(lr)
         self.epochs = int(epochs)
+        self.random_augment = bool(random_augment)
         
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
@@ -30,7 +31,8 @@ class CoopFewShotClassifier(FewShotClassifier):
         return {
             "context_len": self.context_len,
             "lr": self.lr,
-            "epochs": self.epochs
+            "epochs": self.epochs,
+            "random_augment": self.random_augment
         }
     
     '''
@@ -87,10 +89,16 @@ class CoopFewShotClassifier(FewShotClassifier):
             total_count = 0
             
             for batch_idx, (vid_paths, vid_labels) in enumerate(train_dataloader):
-                vid_embeds = torch.cat([
-                    torch.from_numpy(self.vlm.get_video_embeds(vid_path)).unsqueeze(0).to(DEVICE)
-                    for vid_path in vid_paths
-                ], dim=0)
+                if self.random_augment:
+                    vid_embeds = torch.cat([
+                        torch.from_numpy(self.vlm.video_encoder(vid_path, random_augment=True)).unsqueeze(0).to(DEVICE)
+                        for vid_path in vid_paths
+                    ], dim=0)
+                else: # Use version of video encoder which can cache results for fast lookup
+                    vid_embeds = torch.cat([
+                        torch.from_numpy(self.vlm.get_video_embeds(vid_path)).unsqueeze(0).to(DEVICE)
+                        for vid_path in vid_paths
+                    ], dim=0)
                 vid_labels = vid_labels.to(DEVICE)
                 
                 logits = coop_module(vid_embeds)
@@ -101,7 +109,7 @@ class CoopFewShotClassifier(FewShotClassifier):
                 total_count += len(vid_paths)
                 
                 optimizer.zero_grad()
-                loss.backward(retain_graph=True)
+                loss.backward()#retain_graph=True)
                 optimizer.step()
             scheduler.step()
                 

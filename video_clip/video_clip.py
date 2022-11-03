@@ -118,6 +118,9 @@ class VideoClipVLM(SimilarityVLM):
             self.model.caps = caps.to(DEVICE)
             self.model.cmasks = cmasks.to(DEVICE)
             self.model.to(DEVICE)
+        else:
+            self.model.caps = caps
+            self.model.cmasks = cmasks
 
         return
 
@@ -232,7 +235,7 @@ class VideoClipVLM(SimilarityVLM):
             input_word_embeds, attn_mask = self.get_input_word_embeddings([text])
             return self.text_encoder_from_word_embeddings(input_word_embeds, attn_mask)[0].cpu().numpy()
 
-    def open_video(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+    def open_video(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_augment: bool = False) -> np.ndarray:
         """
         Opens video and returns basic, non-transformed video tensor
         Video model requires blocks of 1 second, 30 frame videos
@@ -244,21 +247,24 @@ class VideoClipVLM(SimilarityVLM):
         video_reader = decord.VideoReader(video_path, num_threads=1)
         video_len = len(video_reader)
         video_fps = video_reader.get_avg_fps()
-        return video_reader.get_batch(self.sample_frame_indices(video_len, video_fps, subvideo_start_frame, subvideo_end_frame))
+        return video_reader.get_batch(self.sample_frame_indices(video_len, video_fps, subvideo_start_frame, subvideo_end_frame, random_augment))
 
-    def transform(self, video):
+    def transform(self, video, random_augment: bool = False):
         """
         Transforms video using model-specific transforms
         :param video:
         :return:
         """
-        inputs = self.transforms(video)
+        if random_augment:
+            inputs = self.train_transforms(video)
+        else:
+            inputs = self.transforms(video)
         # B, T, FPS, H, W, C (VideoCLIP is trained on 30 fps of s3d)
         _, h, w, c = inputs.size()
         inputs = inputs.view(1, -1, 30, h, w, c)  # Add singleton batch dimension
         return inputs
 
-    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_augment: bool = False) -> np.ndarray:
         """
         Load, transform and encode a video file into a joint text/video embedding space
         :param video:
@@ -266,8 +272,8 @@ class VideoClipVLM(SimilarityVLM):
         :param subvideo_end_frame:
         :return:
         """
-        video = self.open_video(video_path, subvideo_start_frame, subvideo_end_frame)
-        video = self.transform(video)
+        video = self.open_video(video_path, subvideo_start_frame, subvideo_end_frame, random_augment)
+        video = self.transform(video, random_augment)
         
         if self.cuda:
             video = video.to(DEVICE)
@@ -314,7 +320,7 @@ class VideoClipVLM(SimilarityVLM):
         
         return transforms
     
-    def sample_frame_indices(self, video_len: int, video_fps: float, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, use_strat: Optional[str] = None) -> np.ndarray:
+    def sample_frame_indices(self, video_len: int, video_fps: float, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_augment: bool = False) -> np.ndarray:
         subvideo_start_frame = subvideo_start_frame or 0
         subvideo_end_frame = subvideo_end_frame or video_len
         
@@ -325,11 +331,9 @@ class VideoClipVLM(SimilarityVLM):
         # NOTE: Videos with duration < 1sec will be stretched as though they cover 1sec
         focused_seconds = np.clip(int(total_framecount_native / native_fps), 1, self.num_seconds)
         
-        if not use_strat:
-            use_strat = self.sample_strat
-        
         # Extract self.num_seconds 1sec/30frame video blocks from the center of the total video duration
-        if use_strat == "center":
+        # TODO: Add support for random_augment
+        if self.sample_strat == "center":
             # Calculate size of focus window in number of frames for both native fps and desired 30 fps
             focused_framecount_native = math.ceil(native_fps * focused_seconds)
             focused_framecount_desired = 30 * focused_seconds # Ensure input has multiple of 30 frames
@@ -344,7 +348,8 @@ class VideoClipVLM(SimilarityVLM):
             return focus_frame_indices_desired
         
         # Extract self.num_seconds 1sec/30frame video blocks from the start of the total video duration
-        if use_strat == "start":
+        # TODO: Add support for random_augment
+        if self.sample_strat == "start":
             # Calculate size of focus window in number of frames for both native fps and desired 30 fps
             focused_framecount_native = math.ceil(native_fps * focused_seconds)
             focused_framecount_desired = 30 * focused_seconds # Ensure input has multiple of 30 frames
@@ -359,8 +364,10 @@ class VideoClipVLM(SimilarityVLM):
             return focus_frame_indices_desired
         
         # Collect self.num_seconds 1s/30frame blocks evenly spread throughout the video duration
-        if use_strat == "spread":
+        if self.sample_strat == "spread":
             block_frame_starts_native = np.round(np.linspace(subvideo_start_frame, subvideo_end_frame, focused_seconds, endpoint=False))
+            if random_augment:
+                block_frame_starts_native += np.random.choice(int((subvideo_end_frame - subvideo_start_frame) / (2 * focused_seconds))) # Randomly start blocks up to half way towards the start of the subsequent block
             focus_frame_indices = []
             for block_frame_start_ind in block_frame_starts_native:
                 block_frame_end_ind = min(block_frame_start_ind + native_fps, subvideo_end_frame)

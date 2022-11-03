@@ -146,7 +146,7 @@ class MILES_SimilarityVLM(SimilarityVLM):
             input_word_embeds, attn_mask = self.get_input_word_embeddings([text])
             return self.text_encoder_from_word_embeddings(input_word_embeds, attn_mask)[0].cpu().numpy()
 
-    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_augment: bool = False) -> np.ndarray:
         """
         Load, transform and encode a video file into a joint text/video embedding space
         :param video:
@@ -157,13 +157,16 @@ class MILES_SimilarityVLM(SimilarityVLM):
         # Load frames
         video_reader = decord.VideoReader(video_path, num_threads=1)
         video_len = len(video_reader)
-        frame_indices = self.sample_frame_indices(video_len, subvideo_start_frame, subvideo_end_frame)
+        frame_indices = self.sample_frame_indices(video_len, subvideo_start_frame, subvideo_end_frame, random_augment)
         frames = video_reader.get_batch(frame_indices).asnumpy()
 
         # Transform
         frames = torch.from_numpy(frames).float() / 255
         frames = frames.permute(0, 3, 1, 2)
-        frames = VIDEO_TRANSFORM_DICT["test"](frames)
+        if random_augment:
+            frames = VIDEO_TRANSFORM_DICT["train"](frames)
+        else:
+            frames = VIDEO_TRANSFORM_DICT["test"](frames)
         video_input = torch.zeros(VIDEO_NUM_FRAMES, 3, INPUT_RES, INPUT_RES)
         video_input[:frames.shape[0]] = frames # Zero-pad frames to desired length
         video_input = video_input.unsqueeze(0)
@@ -182,13 +185,18 @@ class MILES_SimilarityVLM(SimilarityVLM):
         """
         return Similarity.COSINE
     
-    def sample_frame_indices(self, video_len: int, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+    def sample_frame_indices(self, video_len: int, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_augment: bool = False) -> np.ndarray:
         start_frame = subvideo_start_frame or 0
         end_frame = subvideo_end_frame or video_len
             
+        if random_augment:
+            frame_offset = np.random.uniform(0, (end_frame - start_frame) / VIDEO_NUM_FRAMES, size=VIDEO_NUM_FRAMES)
+        else:
+            frame_offset = (end_frame - start_frame) / (2 * VIDEO_NUM_FRAMES)
+            
         frame_indices = np.minimum(
             np.round(
-                np.linspace(start_frame, end_frame, VIDEO_NUM_FRAMES, endpoint=False) + (end_frame - start_frame) / (2 * VIDEO_NUM_FRAMES)
+                np.linspace(start_frame, end_frame, VIDEO_NUM_FRAMES, endpoint=False) + frame_offset
             ),
             end_frame - 1
         )
