@@ -1,5 +1,5 @@
 import os, sys
-from typing import Optional
+from typing import Optional, List
 import numpy as np
 import decord
 from transformers import AutoTokenizer
@@ -36,9 +36,10 @@ MODEL_ARGS = {
 }
 INPUT_RES = 224
 EMBED_DIM = 256
-VIDEO_TOKEN_DIM = 768
+INPUT_WORD_EMBED_DIM = 768
 VIDEO_NUM_FRAME_PATCHES = (224 // 16)**2
 VIDEO_NUM_FRAMES = 4
+LOGIT_SCALE = 20
 
 # Given MILES eval config just uses the default transforms
 # 'test' key gives constant transforms, 'train' key gives randomized tranforms for augmentation
@@ -63,7 +64,22 @@ class MILES_SimilarityVLM(SimilarityVLM):
         
         self.model.to(DEVICE)
         
+        self.model.text_model.eval()
+        self.model.video_model.eval()
+        
         super().__init__(cache_file=os.path.join(FILE_DIR, CACHE_NAME), reset_cache=reset_cache)
+        
+    def logit_scale(self) -> float:
+        return LOGIT_SCALE
+        
+    def input_word_embed_dim(self) -> int:
+        return INPUT_WORD_EMBED_DIM
+    
+    def text_start_special_token_count(self) -> int:
+        return 1
+    
+    def text_end_special_token_count(self) -> int:
+        return 1
         
     def text_encoder(self, text: str) -> np.ndarray:
         """
@@ -80,6 +96,55 @@ class MILES_SimilarityVLM(SimilarityVLM):
             text_embed = self.model.compute_text(inputs)[0].cpu().numpy()
             
         return text_embed
+    
+    def get_input_word_embeddings(self, text_list: List[str]) -> torch.Tensor:
+        """Converts a list of text string into a batched tensor of input word embeddings and a corresponding attention mask,
+        including special tokens.
+
+        Args:
+            text_list (str): _description_
+
+        Returns:
+            torch.Tensor: input token embeddings for the text encoder. Shape (batch, sequence_len, token_dim)
+            torch.Tensor: input sequence attention mask for the text encoder. Shape (batch, sequence_len)
+        """
+        inputs = self.tokenizer(text_list, return_tensors="pt", padding=True, truncation=True)
+        token_ids = inputs["input_ids"].to(DEVICE)
+        attn_mask = inputs["attention_mask"].to(DEVICE)
+        
+        #print(" ".join([self.tokenizer.decode(id) for id in token_ids[0]]))
+        
+        # Convert token ids to token embeddings
+        input_word_embeds = self.model.text_model.embeddings.word_embeddings(token_ids)
+        
+        return input_word_embeds, attn_mask
+    
+    def text_encoder_from_word_embeddings(self, input_word_embeds: torch.Tensor, attn_mask: torch.Tensor) -> torch.Tensor:
+        """Converts a batch of token embeddings and corresponding attention masks into a batch of text embeddings.
+
+        Args:
+            token_embeds (torch.Tensor): Shape (batch, sequence_len, token_dim)
+            attn_mask (torch.Tensor): Shape (batch, sequence_len)
+
+        Returns:
+            torch.Tensor: Shape (batch, embed_dim)
+        """
+        batch_size, seq_len, embed_dim = input_word_embeds.shape
+        
+        # Add positional embeddings and layer norm
+        pos_ids = torch.arange(seq_len, dtype=torch.long, device=DEVICE).expand(batch_size, seq_len)
+        pos_embeds = self.model.text_model.embeddings.position_embeddings(pos_ids)
+        input_embeds = input_word_embeds + pos_embeds
+        input_embeds = self.model.text_model.embeddings.LayerNorm(input_embeds)
+        
+        text_embeds = self.model.text_model(inputs_embeds=input_embeds, attention_mask=attn_mask).last_hidden_state[:, 0, :]
+        text_embeds = self.model.text_proj(text_embeds)
+        return text_embeds
+    
+    def text_encoder_over_embeds(self, text: str) -> torch.Tensor:
+        with torch.no_grad():
+            input_word_embeds, attn_mask = self.get_input_word_embeddings([text])
+            return self.text_encoder_from_word_embeddings(input_word_embeds, attn_mask)[0].cpu().numpy()
 
     def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
         """

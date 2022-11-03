@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import os
+from typing import Optional, List
 
 import torch
 from .MMPT_updated.mmpt.models import MMPTClassifier
@@ -77,6 +78,18 @@ class VideoClipVLM(SimilarityVLM):
             "num_seconds": self.num_seconds,
             "sample_strat": self.sample_strat
         }
+        
+    def logit_scale(self) -> float:
+        return 1
+        
+    def input_word_embed_dim(self) -> int:
+        return 768
+    
+    def text_start_special_token_count(self) -> int:
+        return 2
+    
+    def text_end_special_token_count(self) -> int:
+        return 1
 
     def load_model(self, path="video_clip/MMPT_updated/projects/retri/videoclip/how2.yaml"):
         """
@@ -100,24 +113,30 @@ class VideoClipVLM(SimilarityVLM):
         caps, cmasks = self.model.aligner._build_text_seq(
             self.model.tokenizer(random_text, add_special_tokens=False)["input_ids"])
         caps, cmasks = caps[None, :], cmasks[None, :]
-        self.model.caps = caps.to(DEVICE)
-        self.model.cmasks = cmasks.to(DEVICE)
-        self.model.to(DEVICE)
+        
+        if self.cuda:
+            self.model.caps = caps.to(DEVICE)
+            self.model.cmasks = cmasks.to(DEVICE)
+            self.model.to(DEVICE)
 
         return
 
     def tokenize(self, text):
         """
         Tokenizes text via tokenizer (likely variant of huggingface BertTokenizer)
-        :param text:, list of text to tokenize
-        :return: Tokenized text
+        :param text: list of text to tokenize
+        :return:
         """
-        tokenized_text = []
+        token_ids, attn_masks = [], []
         for t in text:
             caps, cmasks = self.model.aligner._build_text_seq(self.model.tokenizer(t, add_special_tokens=False)["input_ids"])
             caps, cmasks = caps[None, :], cmasks[None, :]
-            tokenized_text.append((caps, cmasks))
-        return tokenized_text
+            token_ids.append(caps)
+            attn_masks.append(cmasks)
+        token_ids = torch.cat(token_ids, dim=0)
+        attn_masks = torch.cat(attn_masks, dim=0)
+            
+        return token_ids, attn_masks
 
     def text_encoder(self, text):
         """
@@ -126,8 +145,9 @@ class VideoClipVLM(SimilarityVLM):
         :return:
         """
 
-        text_tokens, text_mask = self.tokenize([text])[0]
-
+        text_tokens, text_mask = self.tokenize([text])
+        text_tokens = text_tokens
+        text_mask = text_mask
 
         # Note: We have to generate random video frames since VideoCLIP requires video and text input
         # (it uses attention masking to ensure leakage). Can verify by changing video embedding and
@@ -135,15 +155,82 @@ class VideoClipVLM(SimilarityVLM):
 
         random_video = np.zeros((1, 1, 30, 224, 224, 3))
         video_frames = torch.from_numpy(random_video).float()
+ 
         if self.cuda:
-            video_frames = video_frames.to('cuda')
-            text_tokens = text_tokens.to('cuda')
-            text_mask = text_mask.to('cuda')
+            video_frames = video_frames.to(DEVICE)
+            text_tokens = text_tokens.to(DEVICE)
+            text_mask = text_mask.to(DEVICE)
 
         with torch.no_grad():
             output = self.model.mmpt_model(video_frames, text_tokens, text_mask, return_score=False)
-            text_features = output["pooled_text"].cpu().numpy().squeeze()
+            text_features = output["pooled_text"][0].cpu().numpy().squeeze()
         return text_features
+    
+    def get_input_word_embeddings(self, text_list: List[str]) -> torch.Tensor:
+        """Converts a list of text string into a batched tensor of input word embeddings and a corresponding attention mask,
+        including special tokens.
+
+        Args:
+            text_list (str): _description_
+
+        Returns:
+            torch.Tensor: input token embeddings for the text encoder. Shape (batch, sequence_len, token_dim)
+            torch.Tensor: input sequence attention mask for the text encoder. Shape (batch, sequence_len)
+        """
+        text_tokens, text_mask = self.tokenize(text_list)
+        
+        if self.cuda:
+            text_tokens = text_tokens.to(DEVICE)
+            text_mask = text_mask.to(DEVICE)
+            
+        text_input_embeds = self.model.mmpt_model.model.text_encoder.embeddings.word_embeddings(text_tokens)
+        return text_input_embeds, text_mask
+            
+    
+    def text_encoder_from_word_embeddings(self, input_word_embeds: torch.Tensor, attn_mask: torch.Tensor) -> torch.Tensor:
+        """Converts a batch of token embeddings and corresponding attention masks into a batch of text embeddings.
+
+        Args:
+            token_embeds (torch.Tensor): Shape (batch, sequence_len, token_dim)
+            attn_mask (torch.Tensor): Shape (batch, sequence_len)
+
+        Returns:
+            torch.Tensor: Shape (batch, embed_dim)
+        """
+        
+        # Remove second special token from start of input embeds, since it is not used in text encoder
+        input_word_embeds = torch.cat([
+            input_word_embeds[:, :1],
+            input_word_embeds[:, 2:]
+        ], dim=1)
+        attn_mask = torch.cat([
+            attn_mask[:, :1],
+            attn_mask[:, 2:]
+        ], dim=1)
+        
+        # Pass through text encoder
+        text_outputs = self.model.mmpt_model.model.text_encoder(
+            inputs_embeds=input_word_embeds,
+            attention_mask=attn_mask,
+            token_type_ids=torch.zeros_like(attn_mask, dtype=torch.long, device=DEVICE if self.cuda else "cpu"),
+            output_hidden_states=True
+        )[0]
+        
+        # Text output embedding is average over final hidden states for all text tokens and final [SEP]
+        text_output_attn_mask = attn_mask.clone()
+        text_output_attn_mask[:, 0] = False # Do not average over hidden state for first [CLS] token
+        text_output_attn_mask = text_output_attn_mask.type(text_outputs.dtype) / text_output_attn_mask.sum(1, keepdim=True)
+        
+        pooled_text = torch.bmm(
+            text_outputs.transpose(2, 1),
+            text_output_attn_mask.unsqueeze(2)
+        ).squeeze(-1)
+        return pooled_text
+        
+    def text_encoder_over_embeds(self, text):
+        with torch.no_grad():
+            input_word_embeds, attn_mask = self.get_input_word_embeddings([text])
+            return self.text_encoder_from_word_embeddings(input_word_embeds, attn_mask)[0].cpu().numpy()
 
     def open_video(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
         """
@@ -181,6 +268,9 @@ class VideoClipVLM(SimilarityVLM):
         """
         video = self.open_video(video_path, subvideo_start_frame, subvideo_end_frame)
         video = self.transform(video)
+        
+        if self.cuda:
+            video = video.to(DEVICE)
 
         with torch.no_grad():
             video_features = self.model.forward(video)
