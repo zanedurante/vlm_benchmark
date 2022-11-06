@@ -104,6 +104,9 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
             
             for epoch_idx in range(self.finetune_epochs):
                 for batch_idx, (vid_embeds, vid_labels) in enumerate(train_dataloader):
+                    vid_embeds = vid_embeds.to(DEVICE)
+                    vid_labels = vid_labels.to(DEVICE)
+                    
                     logits = adapter_module(vid_embeds)
                     loss = F.cross_entropy(logits, vid_labels)
                     
@@ -112,6 +115,7 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
                     optimizer.step()
                     scheduler.step()
                     
+        query_vid_embeds = query_vid_embeds.to(DEVICE)
         with torch.no_grad():
             query_logits = adapter_module(query_vid_embeds).cpu().numpy()
         query_predictions = np.argmax(query_logits, axis=1)

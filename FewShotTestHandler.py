@@ -43,18 +43,29 @@ class FewShotTestHandler:
             n_support (int): Number of example videos per category per few-shot task
             n_query (Optional[int], optional): Number of videos predicted per category per few-shot task. If None, uses all videos not in support set. Defaults to None.
             n_episodes (int, optional): Number of few-shot tasks to sample. Defaults to 1000.
+        Returns:
+            (float) Accuracy for the given test.
         """
         
         # Skip test if it already exists
         if test_already_stored(self.results, classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes):
-            return
+            # Find dataframe row with accuracy from this run
+            filter_indices = np.ones(len(self.results))
+            for key, val in dataframe_format(classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes).items():
+                if pd.isna(val):
+                    filter_indices = filter_indices & pd.isna(self.results[key])
+                else:
+                    filter_indices = filter_indices & (self.results[key] == val)
+            matched_row = self.results[filter_indices]
+            accuracy = matched_row["accuracy"].values[0]
+            return accuracy
         
         # Load dataset to generate tasks with the desired params
         try:
             few_shot_dataset = FewShotTaskDataset(query_dataset, support_dataset, n_episodes, n_way, n_support, n_query)
         except ValueError:
             # Skip invalid tests (if dataset too small, etc)
-            return
+            return None
         
         task_accuracies = []
         total_queries = 0
@@ -84,6 +95,8 @@ class FewShotTestHandler:
         self.results = append_test_result(self.results, classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes, accuracy, accuracy_std)
         if self.test_results_path is not None:
             self.results.to_csv(self.test_results_path, index=False)
+            
+        return accuracy
         
     
     
@@ -128,6 +141,20 @@ def dataframe_format(classifier: FewShotClassifier, query_dataset: DatasetHandle
 
     return row
 
+def filter_test_results(results: pd.DataFrame, column_value_dict: dict) -> pd.DataFrame:
+    if len(results) == 0:
+        return results
+    
+    valid_indices = np.ones(len(results)).astype(bool)
+    for col, val in column_value_dict.items():
+        if col not in results.columns:
+            valid_indices &= False
+        if pd.isna(val):
+            valid_indices &= pd.isna(results[col])
+        else:
+            valid_indices &= (results[col] == val)
+    return results[valid_indices]
+
 def test_already_stored(results: pd.DataFrame,
                         classifier: FewShotClassifier, query_dataset: DatasetHandler, support_dataset: DatasetHandler,
                         n_way: int, n_support: int, n_query: int, n_episodes: int) -> bool:
@@ -170,7 +197,7 @@ def append_test_result(results: pd.DataFrame,
 
 def find_hyperparameters(results: pd.DataFrame,
                          hyperparam_cols: list,
-                         average_over_cols: list = ["n_way", "n_support"],
+                         average_over_cols: list = [],
                          target_cols: list = ["accuracy", "accuracy_std"],
                          val_split: str = "val") -> pd.DataFrame:
     """Finds the best hyperparameter values which maximize accuracy in the given val_split.
@@ -205,7 +232,7 @@ def find_hyperparameters(results: pd.DataFrame,
 
 def optimize_hyperparameters(results: pd.DataFrame,
                              hyperparam_cols: list,
-                             average_over_cols: list = ["n_way", "n_support"],
+                             average_over_cols: list = [],
                              target_cols: list = ["accuracy", "accuracy_std"],
                              val_split: str = "val",
                              test_split: str = "test") -> pd.DataFrame:
