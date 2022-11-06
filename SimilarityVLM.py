@@ -132,24 +132,68 @@ class SimilarityVLM(ABC):
         return vid_embed
 
     @abstractmethod
+    def logit_scale(self) -> float:
+        raise NotImplementedError
+        
+    @abstractmethod
+    def input_word_embed_dim(self) -> int:
+        raise NotImplementedError
+    
+    @abstractmethod
+    def text_start_special_token_count(self) -> int:
+        raise NotImplementedError
+    
+    @abstractmethod
+    def text_end_special_token_count(self) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
     def text_encoder(self, text: str) -> np.ndarray:
         """
         Tokenize and encode text into a joint text/video embedding space
         :param text:
         :return:
         """
-        pass
+        raise NotImplementedError
+    
+    @abstractmethod
+    def get_input_word_embeddings(self, text_list: List[str]) -> torch.Tensor:
+        """Converts a list of text string into a batched tensor of input word embeddings and a corresponding attention mask,
+        including special tokens.
+
+        Args:
+            text_list (str): _description_
+
+        Returns:
+            torch.Tensor: input token embeddings for the text encoder. Shape (batch, sequence_len, token_dim)
+            torch.Tensor: input sequence attention mask for the text encoder. Shape (batch, sequence_len)
+        """
+        raise NotImplementedError
+    
+    @abstractmethod
+    def text_encoder_from_word_embeddings(self, input_word_embeds: torch.Tensor, attn_mask: torch.Tensor) -> torch.Tensor:
+        """Converts a batch of token embeddings and corresponding attention masks into a batch of text embeddings.
+
+        Args:
+            token_embeds (torch.Tensor): Shape (batch, sequence_len, token_dim)
+            attn_mask (torch.Tensor): Shape (batch, sequence_len)
+
+        Returns:
+            torch.Tensor: Shape (batch, embed_dim)
+        """
+        raise NotImplementedError
 
     @abstractmethod
-    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None) -> np.ndarray:
+    def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_augment: bool = False) -> np.ndarray:
         """
         Load, transform and encode a video file into a joint text/video embedding space
         :param video:
         :param subvideo_start_frame:
         :param subvideo_end_frame:
+        :param random_augment:
         :return:
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def default_similarity_metric(self) -> Similarity:
@@ -157,4 +201,4 @@ class SimilarityVLM(ABC):
         Returns a reference to the default similarity metric used by this VLM
         :return:
         """
-        pass
+        raise NotImplementedError
