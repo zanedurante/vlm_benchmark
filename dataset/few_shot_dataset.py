@@ -1,6 +1,7 @@
 import itertools
 from typing import Optional
 import numpy as np
+import contextlib
 import torch
 
 from .dataset_handler import DatasetHandler
@@ -74,12 +75,14 @@ class FewShotTaskDataset(torch.utils.data.IterableDataset):
         # Set np random seed
         # TODO: Figure out better way
         # TEMPORARY!!
-        np.random.seed(0)
+        #np.random.seed(0)
+        # Local random number generator with fixed seed across runs
+        self.rng = np.random.default_rng(0)
         
     def __iter__(self):
         for i in range(self.n_episodes):
             # Select categories
-            sampled_categories = np.random.choice(self.category_indices, self.n_way, replace=False)
+            sampled_categories = self.rng.choice(self.category_indices, self.n_way, replace=False)
             
             # Collect category videos
             if self.n_support > 0:
@@ -91,7 +94,7 @@ class FewShotTaskDataset(torch.utils.data.IterableDataset):
             for cat_label, cat_ind in enumerate(sampled_categories):
                 if self.same_dataset:
                     sample_size = self.n_support + (self.n_query or 1)
-                    sampled_videos = np.random.choice(self.query_videos[cat_ind], size=sample_size, replace=False)
+                    sampled_videos = self.rng.choice(self.query_videos[cat_ind], size=sample_size, replace=False)
                 
                     sampled_queries = sampled_videos[self.n_support:]
                     query_videos += sampled_queries.tolist()
@@ -101,12 +104,12 @@ class FewShotTaskDataset(torch.utils.data.IterableDataset):
                         sampled_supports = sampled_videos[:self.n_support]
                         support_videos.append(sampled_supports)
                 else:
-                    sampled_queries = np.random.choice(self.query_videos[cat_ind], size=(self.n_query or len(self.query_videos[cat_ind])), replace=False)
+                    sampled_queries = self.rng.choice(self.query_videos[cat_ind], size=(self.n_query or len(self.query_videos[cat_ind])), replace=False)
                     query_videos += sampled_queries.tolist()
                     query_labels += [cat_label] * len(sampled_queries)
                     
                     if support_videos is not None:
-                        sampled_supports = np.random.choice(self.support_videos[cat_ind], size=self.n_support, replace=False)
+                        sampled_supports = self.rng.choice(self.support_videos[cat_ind], size=self.n_support, replace=False)
                         support_videos.append(sampled_supports)
                 
             query_videos = np.array(query_videos)
