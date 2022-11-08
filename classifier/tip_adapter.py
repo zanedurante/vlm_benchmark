@@ -49,12 +49,15 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
                                             Can be None if n_support == 0.
         query_video_paths (np.array):       Array of query video paths to be predicted.
                                             Shape = (n_predict,).
+        val_tuning_video_paths (Optional[np.array]):  Optional set of video paths from val split which the classifier can use to select the best-performing model/epoch.
+        val_tuning_video_labels (Optional[np.array]): Labels for val_tuning_video_paths.
     Returns:
         (np.array):                         Predicted category index (with respect to the first index of the given
                                             category names and support videos) for each query video path.
                                             Shape = (n_predict,).
     '''
-    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray) -> np.ndarray:
+    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray,
+                val_tuning_video_paths: Optional[np.array] = None, val_tuning_video_labels: Optional[np.array] = None) -> np.ndarray:
         n_way = len(category_names)
         n_predict = query_video_paths.shape[0]
         if support_video_paths is None:

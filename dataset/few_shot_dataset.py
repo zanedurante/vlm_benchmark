@@ -31,8 +31,9 @@ class FewShotTaskDataset(torch.utils.data.IterableDataset):
         n_way (int):                        Number of categories given in each few-shot task/datapoint sampled.
         n_support (int):                    Number of example videos for each category in each few-shot task/datapoint sampled.
         n_query (Optional[int]):            Number of videos a model must predict for each category in each few-shot task/datapoint sampled. If None, uses all videos not in support set.
+        val_tuning_dataset (Optional[DatasetHandler], optional): Optionally provided val dataset which classifiers can use to select the best performing epoch.
     '''
-    def __init__(self, query_dataset: DatasetHandler, support_dataset: DatasetHandler, n_episodes: int, n_way: int, n_support: int, n_query: Optional[int]) -> None:
+    def __init__(self, query_dataset: DatasetHandler, support_dataset: DatasetHandler, n_episodes: int, n_way: int, n_support: int, n_query: Optional[int], val_tuning_dataset: Optional[DatasetHandler]) -> None:
         super().__init__()
         
         self.n_episodes = n_episodes
@@ -72,10 +73,14 @@ class FewShotTaskDataset(torch.utils.data.IterableDataset):
                 for category in self.category_names
             ]
             
-        # Set np random seed
-        # TODO: Figure out better way
-        # TEMPORARY!!
-        #np.random.seed(0)
+        if val_tuning_dataset is not None:
+            self.val_tuning_videos = [
+                np.array(val_tuning_dataset.data_dict[category])
+                for category in self.category_names
+            ]
+        else:
+            self.val_tuning_videos = None
+            
         # Local random number generator with fixed seed across runs
         self.rng = np.random.default_rng(0)
         
@@ -93,7 +98,10 @@ class FewShotTaskDataset(torch.utils.data.IterableDataset):
             query_labels = [] # Will construct 1D np array
             for cat_label, cat_ind in enumerate(sampled_categories):
                 if self.same_dataset:
-                    sample_size = self.n_support + (self.n_query or 1)
+                    if self.n_query is None:
+                        sample_size = len(self.query_videos[cat_ind])
+                    else:
+                        sample_size = self.n_support + self.n_query
                     sampled_videos = self.rng.choice(self.query_videos[cat_ind], size=sample_size, replace=False)
                 
                     sampled_queries = sampled_videos[self.n_support:]
@@ -124,7 +132,16 @@ class FewShotTaskDataset(torch.utils.data.IterableDataset):
             ]
             sampled_category_names = np.array(sampled_category_names)
             
-            yield sampled_category_names, support_videos, query_videos, query_labels
+            if self.val_tuning_videos is None:
+                yield sampled_category_names, support_videos, query_videos, query_labels, None, None
+            else:
+                # Collect all videos/labels from val_tuning dataset for chosen categories
+                val_tuning_videos = [self.val_tuning_videos[cat_ind] for cat_label, cat_ind in enumerate(sampled_categories)]
+                val_tuning_labels = [[cat_label] * len(self.val_tuning_videos[cat_ind]) for cat_label, cat_ind in enumerate(sampled_categories)]
+                val_tuning_videos = np.concatenate(val_tuning_videos, axis=0)
+                val_tuning_labels = np.concatenate(val_tuning_labels, axis=0)
+                
+                yield sampled_category_names, support_videos, query_videos, query_labels, val_tuning_videos, val_tuning_labels
             
     def __len__(self):
         return self.n_episodes

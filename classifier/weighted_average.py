@@ -43,12 +43,15 @@ class WeightedTextFewShotClassifier(FewShotClassifier):
                                             Can be None if n_support == 0.
         query_video_paths (np.array):       Array of query video paths to be predicted.
                                             Shape = (n_predict,).
+        val_tuning_video_paths (Optional[np.array]):  Optional set of video paths from val split which the classifier can use to select the best-performing model/epoch.
+        val_tuning_video_labels (Optional[np.array]): Labels for val_tuning_video_paths.
     Returns:
         (np.array):                         Predicted category index (with respect to the first index of the given
                                             category names and support videos) for each query video path.
                                             Shape = (n_predict,).
     '''
-    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray) -> np.ndarray:
+    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray,
+                val_tuning_video_paths: Optional[np.array] = None, val_tuning_video_labels: Optional[np.array] = None) -> np.ndarray:
         n_way = category_names.shape[0]
         n_predict = query_video_paths.shape[0]
         if support_video_paths is not None:
@@ -71,6 +74,8 @@ class WeightedTextFewShotClassifier(FewShotClassifier):
             support_vid_embeds = flat_support_embeds.reshape(n_way, n_support, -1)
             support_embeds.append(support_vid_embeds)
             support_embed_weights += [1] * n_support
+        else:
+            support_embed_weights = [1.0] # text_weight is meaningless if n_support=0
         
         support_embeds = np.concatenate(support_embeds, axis=1)
         prototype_embeds = np.average(support_embeds, axis=1, weights=support_embed_weights)

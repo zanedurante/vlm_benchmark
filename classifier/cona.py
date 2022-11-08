@@ -1,5 +1,6 @@
 from typing import Optional
 import numpy as np
+from copy import deepcopy
 
 import torch
 from torch import nn
@@ -10,6 +11,8 @@ from SimilarityVLM import SimilarityVLM
 from similarity_metrics import Similarity
 from .base import FewShotClassifier
 
+QUERY_BATCH_SIZE = 1024 # Batch size used for iterating through non-training data
+
 '''
 Implementation of our algorithm: Context Name Optimization.
 '''
@@ -18,7 +21,8 @@ class CoNaFewShotClassifier(FewShotClassifier):
                  opt_strat: str = "joint", name_regularization: float = 1e-2,
                  lr: float = 1e-3, epochs: int = 10,
                  warmup_lr: float = 1e-5, warmup_epochs: int = 1, 
-                 batch_size: int = 1, random_augment: bool = True):
+                 batch_size: int = 1, optimizer: str = "sgd",
+                 random_augment: bool = True):
         self.vlm = vlm
         
         self.context_len = int(context_len)
@@ -29,9 +33,11 @@ class CoNaFewShotClassifier(FewShotClassifier):
         self.warmup_lr = float(warmup_lr)
         self.warmup_epochs = float(warmup_epochs)
         self.batch_size = int(batch_size)
+        self.optimizer = str(optimizer)
         self.random_augment = bool(random_augment)
         
         assert opt_strat in ["joint"], "Invalid optimization strategy."
+        assert optimizer in ["sgd", "adam"], "Invalid optimizer choice."
         
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
@@ -48,6 +54,7 @@ class CoNaFewShotClassifier(FewShotClassifier):
             "warmup_lr": self.warmup_lr,
             "warmup_epochs": self.warmup_epochs,
             "batch_size": self.batch_size,
+            "optimizer": self.optimizer,
             "random_augment": self.random_augment
         }
     
@@ -61,12 +68,15 @@ class CoNaFewShotClassifier(FewShotClassifier):
                                             Can be None if n_support == 0.
         query_video_paths (np.array):       Array of query video paths to be predicted.
                                             Shape = (n_predict,).
+        val_tuning_video_paths (Optional[np.array]):  Optional set of video paths from val split which the classifier can use to select the best-performing model/epoch.
+        val_tuning_video_labels (Optional[np.array]): Labels for val_tuning_video_paths.
     Returns:
         (np.array):                         Predicted category index (with respect to the first index of the given
                                             category names and support videos) for each query video path.
                                             Shape = (n_predict,).
     '''
-    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray) -> np.ndarray:
+    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray,
+                val_tuning_video_paths: Optional[np.array] = None, val_tuning_video_labels: Optional[np.array] = None) -> np.ndarray:
         n_way = len(category_names)
         n_predict = query_video_paths.shape[0]
         if support_video_paths is None:
@@ -93,10 +103,24 @@ class CoNaFewShotClassifier(FewShotClassifier):
             batch_size=self.batch_size, num_workers=0, shuffle=True
         )
         
+        # Check if able to use val tuning dataset (to select best-performing epoch)
+        if val_tuning_video_paths is None or val_tuning_video_labels is None:
+            val_tuning_dataloader = None
+        else:
+            val_tuning_dataloader = torch.utils.data.DataLoader(
+                list(zip(val_tuning_video_paths, val_tuning_video_labels)),
+                batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=True
+            )
+        
         cona_module = CoNaModule(self.vlm, category_names, self.context_len)
         cona_module.to(DEVICE)
         
-        optimizer = torch.optim.SGD(cona_module.parameters(), lr=self.lr)
+        if self.optimizer == "sgd":
+            optimizer = torch.optim.SGD(cona_module.parameters(), lr=self.lr)
+        elif self.optimizer == "adam":
+            optimizer = torch.optim.Adam(cona_module.parameters(), lr=self.lr)
+        else:
+            raise NotImplementedError
         
         # Constant warmup lr until we begin a cosine lr decay schedule
         scheduler = torch.optim.lr_scheduler.SequentialLR(
@@ -115,6 +139,9 @@ class CoNaFewShotClassifier(FewShotClassifier):
             [self.warmup_epochs]
         )
         
+        # Save best-performing model (if val tuning dataset is provided)
+        val_tuning_best_acc = None
+        val_tuning_best_model_state = None
         for epoch_idx in range(self.epochs):
             total_loss = 0
             total_reg_loss = 0
@@ -148,12 +175,39 @@ class CoNaFewShotClassifier(FewShotClassifier):
                 combined_loss.backward()
                 optimizer.step()
             scheduler.step()
+            
+            # Check val-tuning performance
+            if val_tuning_dataloader is not None:
+                total_val_correct = 0
+                total_val_count = 0
+                for batch_idx, (vid_paths, vid_labels) in enumerate(val_tuning_dataloader):
+                    vid_embeds = torch.cat([
+                        torch.from_numpy(self.vlm.get_video_embeds(vid_path)).unsqueeze(0).to(DEVICE)
+                        for vid_path in vid_paths
+                    ], dim=0)
+                    vid_labels = vid_labels.to(DEVICE)
+                    
+                    with torch.no_grad():
+                        logits = cona_module(vid_embeds)
+                    total_val_correct += (logits.argmax(dim=1) == vid_labels).sum()
+                    total_val_count += len(vid_paths)
+                    
+                val_acc = total_val_correct / total_val_count
+                if val_tuning_best_acc is None or val_acc >= val_tuning_best_acc:
+                    val_tuning_best_acc = val_acc
+                    val_tuning_best_model_state = deepcopy(cona_module.state_dict())
+            else:
+                val_acc = None
                 
-            print(f"Epoch {epoch_idx:5}: Acc = {total_correct / total_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Reg Loss = {total_reg_loss / total_count:5.3E}")
+            print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Val-Tune Acc = {total_val_correct / total_val_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Reg Loss = {total_reg_loss / total_count:5.3E}")
                 
                 
                 
-        query_dataloader = torch.utils.data.DataLoader(query_video_paths, batch_size=self.batch_size, num_workers=0, shuffle=False)
+        # Reload best val-tuning model state
+        if val_tuning_best_model_state is not None:
+            cona_module.load_state_dict(val_tuning_best_model_state)
+                
+        query_dataloader = torch.utils.data.DataLoader(query_video_paths, batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
         with torch.no_grad():
             query_predictions = []
             for batch_idx, vid_paths in enumerate(query_dataloader):
@@ -191,8 +245,9 @@ class CoNaModule(nn.Module):
         self.context = nn.Parameter(context)
         
         # Class-specific name embedding tweaks
-        name_perturbation = torch.empty_like(category_name_input_embeds)
-        nn.init.normal_(name_perturbation, std=0.02)
+        #name_perturbation = torch.empty_like(category_name_input_embeds)
+        #nn.init.normal_(name_perturbation, std=0.02)
+        name_perturbation = torch.zeros_like(category_name_input_embeds)
         self.name_perturbation = nn.Parameter(name_perturbation)
         
         # Mask for class embeddings which aren't special tokens

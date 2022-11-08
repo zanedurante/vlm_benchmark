@@ -8,7 +8,7 @@ import json
 from SimilarityVLM import SimilarityVLM
 from classifier import FewShotClassifier
 from dataset import DatasetHandler, FewShotTaskDataset
-from pathlib import Path
+
 
 
 '''
@@ -20,12 +20,8 @@ TEST_RESULTS_PATH = os.path.join(FILE_DIR, "test_results.csv")
 
 
 class FewShotTestHandler:
-    def __init__(self, test_results_path: Optional[str] = TEST_RESULTS_PATH, use_best_query: Optional[bool] = False, dataset_name: Optional[str] = "default"):
+    def __init__(self, test_results_path: Optional[str] = TEST_RESULTS_PATH):
         self.test_results_path = test_results_path
-        self.use_best_query = use_best_query
-        self.num_runs = 0
-        self.dataset_name = dataset_name
-        self.category_names = None
         
         # Load results DataFrame
         if test_results_path is not None and os.path.exists(test_results_path):
@@ -35,6 +31,7 @@ class FewShotTestHandler:
 
     def run_few_shot_test(self, classifier: FewShotClassifier, query_dataset: DatasetHandler, support_dataset: DatasetHandler,
                           n_way: int, n_support: int, n_query: Optional[int] = None, n_episodes: int = 1000,
+                          val_tuning_dataset: Optional[DatasetHandler] = None
                           ) -> None:
         """Runs the given few-shot test if it has not already been performed,
         saving the accuracy.
@@ -47,15 +44,16 @@ class FewShotTestHandler:
             n_support (int): Number of example videos per category per few-shot task
             n_query (Optional[int], optional): Number of videos predicted per category per few-shot task. If None, uses all videos not in support set. Defaults to None.
             n_episodes (int, optional): Number of few-shot tasks to sample. Defaults to 1000.
+            val_tuning_dataset (Optional[DatasetHandler], optional): Optionally provided val dataset which classifiers can use to select the best performing epoch.
         Returns:
             (float) Accuracy for the given test.
         """
         
         # Skip test if it already exists
-        if test_already_stored(self.results, classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes):
+        if test_already_stored(self.results, classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes, val_tuning_dataset):
             # Find dataframe row with accuracy from this run
             filter_indices = np.ones(len(self.results))
-            for key, val in dataframe_format(classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes).items():
+            for key, val in dataframe_format(classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes, val_tuning_dataset).items():
                 if pd.isna(val):
                     filter_indices = filter_indices & pd.isna(self.results[key])
                 else:
@@ -66,7 +64,7 @@ class FewShotTestHandler:
         
         # Load dataset to generate tasks with the desired params
         try:
-            few_shot_dataset = FewShotTaskDataset(query_dataset, support_dataset, n_episodes, n_way, n_support, n_query)
+            few_shot_dataset = FewShotTaskDataset(query_dataset, support_dataset, n_episodes, n_way, n_support, n_query, val_tuning_dataset)
         except ValueError:
             # Skip invalid tests (if dataset too small, etc)
             return None
@@ -75,17 +73,9 @@ class FewShotTestHandler:
         total_queries = 0
         total_correct = 0
         dataset_iter = tqdm(few_shot_dataset, leave=False)
-        for category_names, support_vid_paths, query_vid_paths, query_vid_labels in dataset_iter:
-            
-            self.category_names = category_names
-            
-            if self.use_best_query:
-                save_path = "fewshot_models/{}/{}/{}_way/{}_shots/best_model_{}.pth".format(classifier.name, self.dataset_name[0], n_way, n_support, self.num_runs)
-                Path(save_path[:save_path.find("best_model")]).mkdir(parents=True, exist_ok=True)
+        for category_names, support_vid_paths, query_vid_paths, query_vid_labels, val_tuning_vid_paths, val_tuning_vid_labels in dataset_iter:
                 
-                query_predictions = classifier.predict(category_names, support_vid_paths, query_vid_paths, query_video_labels=query_vid_labels, model_save_path=save_path)
-            else:
-                query_predictions = classifier.predict(category_names, support_vid_paths, query_vid_paths)
+            query_predictions = classifier.predict(category_names, support_vid_paths, query_vid_paths, val_tuning_vid_paths, val_tuning_vid_labels)
             
             # Compute accuracy for this sampled task
             correct_predictions = np.sum(query_predictions == query_vid_labels)
@@ -96,8 +86,6 @@ class FewShotTestHandler:
             total_queries += len(query_vid_paths)
             total_correct += correct_predictions
             dataset_iter.set_postfix({"accuracy": total_correct / total_queries})
-            self.num_runs += 1
-
         
         # TODO: Look into other error/confidence-bound measures we should save
         # - Uncertainty in performance given a particular set of support videos (decreases with number of queries)
@@ -106,7 +94,7 @@ class FewShotTestHandler:
         accuracy_std = np.std(task_accuracies)
         
         # Add to test results and save
-        self.results = append_test_result(self.results, classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes, accuracy, accuracy_std)
+        self.results = append_test_result(self.results, classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes, val_tuning_dataset, accuracy, accuracy_std)
         if self.test_results_path is not None:
             self.results.to_csv(self.test_results_path, index=False)
             
@@ -122,7 +110,7 @@ Test Results DataFrame Utilities
 '''
 
 def dataframe_format(classifier: FewShotClassifier, query_dataset: DatasetHandler, support_dataset: DatasetHandler,
-                     n_way: int, n_support: int, n_query: int, n_episodes: int,
+                     n_way: int, n_support: int, n_query: int, n_episodes: int, val_tuning_dataset: Optional[DatasetHandler],
                      accuracy: Optional[float] = None, accuracy_std: Optional[float] = None) -> dict:
     row = {
         "vlm_class": classifier.vlm.__class__.__name__,
@@ -132,7 +120,8 @@ def dataframe_format(classifier: FewShotClassifier, query_dataset: DatasetHandle
         "n_way": n_way,
         "n_support": n_support,
         "n_query": n_query,
-        "n_episodes": n_episodes
+        "n_episodes": n_episodes,
+        "val_tuning_dataset": None if val_tuning_dataset is None else val_tuning_dataset.id()
     }
     row.update({
         f"vlm.{key}": val
@@ -171,10 +160,10 @@ def filter_test_results(results: pd.DataFrame, column_value_dict: dict) -> pd.Da
 
 def test_already_stored(results: pd.DataFrame,
                         classifier: FewShotClassifier, query_dataset: DatasetHandler, support_dataset: DatasetHandler,
-                        n_way: int, n_support: int, n_query: int, n_episodes: int) -> bool:
+                        n_way: int, n_support: int, n_query: int, n_episodes: int, val_tuning_dataset: Optional[DatasetHandler]) -> bool:
 
     valid_indices = np.ones(len(results)).astype(bool)
-    for key, val in dataframe_format(classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes).items():
+    for key, val in dataframe_format(classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes, val_tuning_dataset).items():
         if key not in results.columns:
             return False
         if pd.isna(val):
@@ -187,10 +176,10 @@ def test_already_stored(results: pd.DataFrame,
 
 def append_test_result(results: pd.DataFrame,
                        classifier: FewShotClassifier, query_dataset: DatasetHandler, support_dataset: DatasetHandler,
-                       n_way: int, n_support: int, n_query: int, n_episodes: int,
+                       n_way: int, n_support: int, n_query: int, n_episodes: int, val_tuning_dataset: Optional[DatasetHandler],
                        accuracy: float, accuracy_std: float) -> pd.DataFrame:
     
-    formatted_row = dataframe_format(classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes, accuracy, accuracy_std)
+    formatted_row = dataframe_format(classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes, val_tuning_dataset, accuracy, accuracy_std)
     
     # Check if any new columns need to be added (new vlm/classifier-specific params)
     new_columns = set(formatted_row.keys()) - set(results.columns)
@@ -203,7 +192,7 @@ def append_test_result(results: pd.DataFrame,
         sorted_vlm_param_columns = sorted(col for col in results.columns if "vlm." in col)
         sorted_classifier_param_columns = sorted(col for col in results.columns if "classifier." in col)
         sorted_columns = ["vlm_class"] + sorted_vlm_param_columns + ["classifier_class"] + sorted_classifier_param_columns + \
-                         ["query_dataset", "support_dataset", "n_way", "n_support", "n_query", "n_episodes", "accuracy", "accuracy_std"]
+                         ["query_dataset", "support_dataset", "n_way", "n_support", "n_query", "n_episodes", "val_tuning_dataset", "accuracy", "accuracy_std"]
         results = results.reindex(columns=sorted_columns)
         
     results.loc[len(results)] = formatted_row

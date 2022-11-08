@@ -16,6 +16,8 @@ VLM_ARG = sys.argv[1]
 CLASSIFIER_ARG = sys.argv[2]
 
 N_HYPERPARAM_SEARCH_CALLS = 32
+SEARCH_METHOD = "random" # gp, forest, random
+USE_VAL_TUNING = True
 
 
 '''
@@ -26,13 +28,12 @@ Test Setup
 test_params_dict = {}
 
 # Dataset Params - dataset.____ keys are passed into DatasetHandler constructor
-test_params_dict["dataset.name"] = ["smsm"]
-test_params_dict["dataset.split"] = ["val"]
+test_params_dict["dataset.name"] = ["smsm", "kinetics_100"]
 test_params_dict["dataset.split_type"] = ["video"]
 
 # Few-Shot Test Params - test.____ keys are passed into few-shot test call
 test_params_dict["test.n_way"] = [100]
-test_params_dict["test.n_support"] = [1, 2, 4, 8, 16, 32, 64]
+test_params_dict["test.n_support"] = [1, 2, 4, 8, 16]#, 32, 64]
 test_params_dict["test.n_query"] = [None]
 test_params_dict["test.n_episodes"] = [4]
 
@@ -113,24 +114,36 @@ elif CLASSIFIER_ARG == "tip_adapter":
         1e-5, 1e-1,
         name="finetune_lr", prior="log-uniform"
     ))
-    classifier_hyperparams.append(skopt.space.Integer(
-        1, 20,
-        name="finetune_epochs", prior="log-uniform"
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [0, 5, 20],
+        name="finetune_epochs"
     ))
+    '''
     classifier_hyperparams.append(skopt.space.Real(
         1e-5, 1e-1,
         name="weight_decay", prior="log-uniform"
     ))
+    '''
 elif CLASSIFIER_ARG == "smsm_object_oracle":
     from classifier.smsm_object_oracle import SmsmObjectOracleFewShotClassifier as Classifier
 elif CLASSIFIER_ARG == "coop":
     from classifier.coop import CoopFewShotClassifier as Classifier
+    fixed_classifier_kwargs["random_augment"] = False
+    fixed_classifier_kwargs["batch_size"] = 8
+    #fixed_classifier_kwargs["optimizer"] = "adam"
+    fixed_classifier_kwargs["epochs"] = 10
+    
     classifier_hyperparams.append(skopt.space.Real(
-        1e-5, 1e-1,
+        1e-4, 1e-1,
         name="lr", prior="log-uniform"
     ))
     classifier_hyperparams.append(skopt.space.Categorical(
-        [2, 5, 10, 20],
+        ["sgd", "adam"],
+        name="optimizer"
+    ))
+    '''
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [5, 10, 20],
         name="epochs"
     ))
     classifier_hyperparams.append(skopt.space.Categorical(
@@ -141,18 +154,29 @@ elif CLASSIFIER_ARG == "coop":
         [1, 8],
         name="batch_size", prior=[0.1, 0.9]
     ))
+    '''
 elif CLASSIFIER_ARG == "cona":
     from classifier.cona import CoNaFewShotClassifier as Classifier
+    fixed_classifier_kwargs["random_augment"] = False
+    fixed_classifier_kwargs["batch_size"] = 8
+    #fixed_classifier_kwargs["optimizer"] = "adam"
+    fixed_classifier_kwargs["epochs"] = 10
+    
     classifier_hyperparams.append(skopt.space.Real(
-        1e-5, 1e-1,
+        1e-4, 1e-1,
         name="lr", prior="log-uniform"
     ))
     classifier_hyperparams.append(skopt.space.Real(
-        1e-2, 1e4,
+        1, 1e6,
         name="name_regularization", prior="log-uniform"
     ))
     classifier_hyperparams.append(skopt.space.Categorical(
-        [2, 5, 10, 20],
+        ["sgd", "adam"],
+        name="optimizer"
+    ))
+    '''
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [5, 10, 20],
         name="epochs"
     ))
     classifier_hyperparams.append(skopt.space.Categorical(
@@ -163,6 +187,7 @@ elif CLASSIFIER_ARG == "cona":
         [1, 8],
         name="batch_size", prior=[0.1, 0.9]
     ))
+    '''
 else:
     raise ValueError("Unrecognized classifier arg")
 
@@ -184,8 +209,8 @@ for classifier_hyper in classifier_hyperparams:
     classifier_hyper.name = f"classifier.{classifier_hyper.name}"
 hyperparam_space = vlm_hyperparams + classifier_hyperparams
 
-query_dataset = None
-support_dataset = None
+train_dataset = None
+val_dataset = None
 test_dataset = None
 cur_dataset_kwargs = None
 
@@ -201,12 +226,10 @@ for test_params in pbar:
     test_kwargs = {key[5:]: val for key, val in test_params.items() if key.startswith("test.")}
 
     # Update dataset
-    if query_dataset is None or cur_dataset_kwargs != dataset_kwargs:
-        query_dataset = DatasetHandler(**dataset_kwargs)
-        support_dataset_kwargs = dict(dataset_kwargs, split="train")
-        support_dataset = DatasetHandler(**support_dataset_kwargs)
-        test_dataset_kwargs = dict(dataset_kwargs, split="test")
-        test_dataset = DatasetHandler(**test_dataset_kwargs)
+    if val_dataset is None or cur_dataset_kwargs != dataset_kwargs:
+        train_dataset = DatasetHandler(**dataset_kwargs, split="train")
+        val_dataset = DatasetHandler(**dataset_kwargs, split="val")
+        test_dataset = DatasetHandler(**dataset_kwargs, split="test")
         
         cur_dataset_kwargs = dataset_kwargs
         
@@ -216,7 +239,8 @@ for test_params in pbar:
         dict(
             test_kwargs,
             query_dataset=test_dataset.id(),
-            support_dataset=support_dataset.id(),
+            support_dataset=train_dataset.id(),
+            val_tuning_dataset=val_dataset.id() if USE_VAL_TUNING else None,
             vlm_class=VLM.__name__,
             **{f"vlm.{key}": val for key, val in fixed_vlm_kwargs.items()},
             classifier_class=Classifier.__name__,
@@ -225,7 +249,7 @@ for test_params in pbar:
     )
     if len(matching_test_run_results):
         print(f"Skipping hyperparam search which already has test results.")
-        print(f"Dataset: {query_dataset.id()}")
+        print(f"Dataset: {test_dataset.id()}")
         print(f"Test kwargs:\n{json.dumps(test_kwargs, indent=2)}")
         continue
     
@@ -249,9 +273,9 @@ for test_params in pbar:
             cur_vlm_kwargs = vlm_kwargs
             
         # Update classifier
-        classifier = Classifier(vlm, **classifier_kwargs)
+        classifier = Classifier(vlm, **fixed_classifier_kwargs, **classifier_kwargs)
         
-        accuracy = val_run_handler.run_few_shot_test(classifier, query_dataset, support_dataset, **test_kwargs)
+        accuracy = val_run_handler.run_few_shot_test(classifier, val_dataset, train_dataset, **test_kwargs, val_tuning_dataset=val_dataset if USE_VAL_TUNING else None)
         return -1 * accuracy
     
     # Callback function for progress bar
@@ -276,8 +300,9 @@ for test_params in pbar:
         val_run_handler.results,
         dict(
             test_kwargs,
-            query_dataset=query_dataset.id(),
-            support_dataset=support_dataset.id(),
+            query_dataset=val_dataset.id(),
+            support_dataset=train_dataset.id(),
+            val_tuning_dataset=val_dataset.id() if USE_VAL_TUNING else None,
             vlm_class=VLM.__name__,
             **{f"vlm.{key}": val for key, val in fixed_vlm_kwargs.items()},
             classifier_class=Classifier.__name__,
@@ -294,8 +319,15 @@ for test_params in pbar:
     
     # Run skopt process
     skopt_pbar = tqdm(total=N_HYPERPARAM_SEARCH_CALLS)
-    skopt_results = skopt.gp_minimize(val_neg_accuracy, hyperparam_space, n_calls=N_HYPERPARAM_SEARCH_CALLS, callback=skopt_callback, x0=x0, y0=y0)
     
+    if SEARCH_METHOD == "gp":
+        skopt_results = skopt.gp_minimize(val_neg_accuracy, hyperparam_space, n_calls=N_HYPERPARAM_SEARCH_CALLS, callback=skopt_callback, x0=x0, y0=y0)
+    elif SEARCH_METHOD == "forest":
+        skopt_results = skopt.forest_minimize(val_neg_accuracy, hyperparam_space, n_calls=N_HYPERPARAM_SEARCH_CALLS, callback=skopt_callback, x0=x0, y0=y0)
+    elif SEARCH_METHOD == "random":
+        for _ in range(N_HYPERPARAM_SEARCH_CALLS):
+            val_neg_accuracy([hyper.rvs(1)[0] for hyper in hyperparam_space])
+            skopt_pbar.update(1)
     
     
     '''
@@ -310,8 +342,9 @@ for test_params in pbar:
         best_hyperparam_values,
         dict(
             test_kwargs,
-            query_dataset=query_dataset.id(),
-            support_dataset=support_dataset.id(),
+            query_dataset=val_dataset.id(),
+            support_dataset=train_dataset.id(),
+            val_tuning_dataset=val_dataset.id() if USE_VAL_TUNING else None,
             vlm_class=VLM.__name__,
             **{f"vlm.{key}": val for key, val in fixed_vlm_kwargs.items()},
             classifier_class=Classifier.__name__,
@@ -352,7 +385,7 @@ for test_params in pbar:
     # Update classifier
     classifier = Classifier(vlm, **fixed_classifier_kwargs, **classifier_kwargs)
     
-    test_acc = test_run_handler.run_few_shot_test(classifier, test_dataset, support_dataset, **test_kwargs)
+    test_acc = test_run_handler.run_few_shot_test(classifier, test_dataset, train_dataset, **test_kwargs, val_tuning_dataset=val_dataset if USE_VAL_TUNING else None)
     print(f"Test Run Complete!")
     print(f"Accuracy: {test_acc}")
     print(f"Dataset: {test_dataset.id()}")
