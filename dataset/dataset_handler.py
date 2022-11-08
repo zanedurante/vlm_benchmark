@@ -70,11 +70,12 @@ class SequentialCategoryNameDataset(torch.utils.data.Dataset):
 
 
 class DatasetHandler:
-    def __init__(self, name: str, split: str = "val", split_type: str = "video", class_limit: Optional[int] = None):
+    def __init__(self, name: str, split: str = "val", split_type: str = "video", class_limit: Optional[int] = None, min_train_videos: int = 16):
         self.name = name
         self.split = split
         self.split_type = split_type
         self.class_limit = class_limit
+        self.min_train_videos = min_train_videos
         
         if split not in ["train", "val", "test", "all"]:
             raise ValueError(f"Invalid dataset split: {split}")
@@ -173,6 +174,18 @@ class DatasetHandler:
         if self.class_limit is not None and self.class_limit < len(self.data_dict):
             for extra_class in list(self.data_dict.keys())[self.class_limit:]:
                 del self.data_dict[extra_class]
+                
+        # Remove classes which have too few training examples
+        # TODO: Determine better way to make this consistent across splits
+        if split == "train":
+            for cat in list(self.data_dict.keys()):
+                if len(self.data_dict[cat]) < min_train_videos:
+                    del self.data_dict[cat]
+        else:
+            train_dataset = DatasetHandler(name, split="train", split_type=split_type, class_limit=class_limit, min_train_videos=min_train_videos)
+            for cat in list(self.data_dict.keys()):
+                if cat not in train_dataset.data_dict.keys():
+                    del self.data_dict[cat]
         
     def id(self) -> str:
         if self.split_type == "class":
