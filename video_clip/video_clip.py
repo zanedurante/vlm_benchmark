@@ -150,25 +150,7 @@ class VideoClipVLM(SimilarityVLM):
         :param text:
         :return:
         """
-
-        text_tokens, text_mask = self.tokenize([text])
-
-        # Note: We have to generate random video frames since VideoCLIP requires video and text input
-        # (it uses attention masking to ensure leakage). Can verify by changing video embedding and
-        # see there is no difference in the output text embeddings.
-
-        random_video = np.zeros((1, 1, 30, 224, 224, 3))
-        video_frames = torch.from_numpy(random_video).float()
- 
-        if self.cuda:
-            video_frames = video_frames.to(DEVICE)
-            text_tokens = text_tokens.to(DEVICE)
-            text_mask = text_mask.to(DEVICE)
-
-        with torch.no_grad():
-            output = self.model.mmpt_model(video_frames, text_tokens, text_mask, return_score=False)
-            text_features = output["pooled_text"][0].cpu().numpy().squeeze()
-        return text_features
+        return self.text_encoder_over_embeds(text)
     
     def get_input_word_embeddings(self, text_list: List[str]) -> torch.Tensor:
         """Converts a list of text string into a batched tensor of input word embeddings and a corresponding attention mask,
