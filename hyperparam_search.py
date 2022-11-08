@@ -32,7 +32,7 @@ test_params_dict["dataset.name"] = ["smsm", "kinetics_100"]
 test_params_dict["dataset.split_type"] = ["video"]
 
 # Few-Shot Test Params - test.____ keys are passed into few-shot test call
-test_params_dict["test.n_way"] = [100]
+test_params_dict["test.n_way"] = [None] # None value gets manually converted to the max size for each dataset
 test_params_dict["test.n_support"] = [1, 2, 4, 8, 16]#, 32, 64]
 test_params_dict["test.n_query"] = [None]
 test_params_dict["test.n_episodes"] = [4]
@@ -130,16 +130,12 @@ elif CLASSIFIER_ARG == "coop":
     from classifier.coop import CoopFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
     fixed_classifier_kwargs["batch_size"] = 8
-    #fixed_classifier_kwargs["optimizer"] = "adam"
+    fixed_classifier_kwargs["optimizer"] = "adam"
     fixed_classifier_kwargs["epochs"] = 10
     
     classifier_hyperparams.append(skopt.space.Real(
         1e-4, 1e-1,
         name="lr", prior="log-uniform"
-    ))
-    classifier_hyperparams.append(skopt.space.Categorical(
-        ["sgd", "adam"],
-        name="optimizer"
     ))
     '''
     classifier_hyperparams.append(skopt.space.Categorical(
@@ -159,7 +155,7 @@ elif CLASSIFIER_ARG == "cona":
     from classifier.cona import CoNaFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
     fixed_classifier_kwargs["batch_size"] = 8
-    #fixed_classifier_kwargs["optimizer"] = "adam"
+    fixed_classifier_kwargs["optimizer"] = "adam"
     fixed_classifier_kwargs["epochs"] = 10
     
     classifier_hyperparams.append(skopt.space.Real(
@@ -167,12 +163,8 @@ elif CLASSIFIER_ARG == "cona":
         name="lr", prior="log-uniform"
     ))
     classifier_hyperparams.append(skopt.space.Real(
-        1, 1e6,
+        1e4, 1e9,
         name="name_regularization", prior="log-uniform"
-    ))
-    classifier_hyperparams.append(skopt.space.Categorical(
-        ["sgd", "adam"],
-        name="optimizer"
     ))
     '''
     classifier_hyperparams.append(skopt.space.Categorical(
@@ -232,6 +224,10 @@ for test_params in pbar:
         test_dataset = DatasetHandler(**dataset_kwargs, split="test")
         
         cur_dataset_kwargs = dataset_kwargs
+        
+    # Convert n_way = None into n_way = max-ways
+    if test_kwargs["n_way"] is None:
+        test_kwargs["n_way"] = train_dataset.category_count()
         
     # Skip if matching final run already exists in test results csv
     matching_test_run_results = filter_test_results(
@@ -375,7 +371,10 @@ for test_params in pbar:
                 # Replace np types with native python types
                 if type(val).__module__ == np.__name__:
                     val = val.item()
-                classifier_kwargs[col[11:]] = val
+                if col != "classifier.metric":
+                    classifier_kwargs[col[11:]] = val
+                else:
+                    classifier_kwargs[col[11:]] = Similarity[val]
                 
     # Update vlm if necessary (allow reuse if unchanging)
     if vlm is None or cur_vlm_kwargs != vlm_kwargs:
