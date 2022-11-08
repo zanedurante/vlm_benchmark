@@ -15,9 +15,9 @@ Implementation of CoOp (https://arxiv.org/abs/2109.01134) for our framework.
 '''
 class CoopFewShotClassifier(FewShotClassifier):
     def __init__(self, vlm: SimilarityVLM, context_len: int = 16, lr: float = 1e-3, epochs: int = 10,
-                 warmup_lr: float = 1e-5, warmup_epochs: int = 1, batch_size: int = 1, random_augment: bool = True):
+                 warmup_lr: float = 1e-5, warmup_epochs: int = 1, batch_size: int = 1, random_augment: bool = True, use_best_query: bool = False):
         self.vlm = vlm
-        
+        self.use_best_query = use_best_query
         self.context_len = int(context_len)
         self.lr = float(lr)
         self.epochs = int(epochs)
@@ -25,6 +25,7 @@ class CoopFewShotClassifier(FewShotClassifier):
         self.warmup_epochs = float(warmup_epochs)
         self.batch_size = int(batch_size)
         self.random_augment = bool(random_augment)
+        self.name = "coop"
         
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
@@ -39,7 +40,8 @@ class CoopFewShotClassifier(FewShotClassifier):
             "warmup_lr": self.warmup_lr,
             "warmup_epochs": self.warmup_epochs,
             "batch_size": self.batch_size,
-            "random_augment": self.random_augment
+            "random_augment": self.random_augment,
+            "use_best_query": True,
         }
     
     '''
@@ -52,12 +54,20 @@ class CoopFewShotClassifier(FewShotClassifier):
                                             Can be None if n_support == 0.
         query_video_paths (np.array):       Array of query video paths to be predicted.
                                             Shape = (n_predict,).
+        query_video_labels (np.array):      Array of labels for query videos.  Only used if self.use_best_query 
+                                            is True.
+        model_save_path (str):              Path to save the best performing model on the query set. Only used if self.use_best_query is True.
     Returns:
         (np.array):                         Predicted category index (with respect to the first index of the given
                                             category names and support videos) for each query video path.
                                             Shape = (n_predict,).
     '''
-    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray) -> np.ndarray:
+    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray, query_video_labels: Optional[np.ndarray] = None, model_save_path: Optional[str] = None) -> np.ndarray:
+        
+        if self.use_best_query:
+            best_val_score = -1
+            best_model = None
+        
         n_way = len(category_names)
         n_predict = query_video_paths.shape[0]
         if support_video_paths is None:
@@ -83,6 +93,13 @@ class CoopFewShotClassifier(FewShotClassifier):
             list(zip(support_video_paths.flatten(), torch.repeat_interleave(torch.arange(n_way), n_support))),
             batch_size=self.batch_size, num_workers=0, shuffle=True
         )
+        
+        if self.use_best_query:
+            val_dataloader = torch.utils.data.DataLoader(
+            list(zip(query_video_paths.flatten(), query_video_labels)),
+            batch_size=self.batch_size, num_workers=0, shuffle=False
+        )
+        
         
         coop_module = SharedContextCoopModule(self.vlm, category_names, self.context_len)
         coop_module.to(DEVICE)
@@ -135,10 +152,50 @@ class CoopFewShotClassifier(FewShotClassifier):
                 loss.backward()
                 optimizer.step()
             scheduler.step()
+            
+            if self.use_best_query:
+                # Get validation scores
+                val_total_correct = 0
+                val_total_count = 0
+                val_total_loss = 0
+                val_preds = []
+                with torch.no_grad():
+                    for batch_idx, (vid_paths, vid_labels) in enumerate(val_dataloader):
+                        vid_embeds = torch.cat([
+                            torch.from_numpy(self.vlm.get_video_embeds(vid_path)).unsqueeze(0).to(DEVICE)
+                            for vid_path in vid_paths
+                        ], dim=0)
+                        vid_labels = vid_labels.to(DEVICE)
+                        logits = coop_module(vid_embeds)
+                        loss = F.cross_entropy(logits, vid_labels)
+                        val_total_correct += (logits.argmax(dim=1) == vid_labels).sum()
+                        val_total_loss += loss.item() * len(vid_paths)
+                        val_total_count += len(vid_paths)
+                        val_preds.append(torch.argmax(logits, dim=1))
+                
+                val_preds = torch.cat(val_preds, dim=0)
+                
+                epoch_val_acc = val_total_correct / val_total_count
+                print(f"Epoch {epoch_idx:5}: Val acc = {epoch_val_acc:5.3f}, Val Loss = {val_total_loss / val_total_count:5.3f}")
+
+                if epoch_val_acc > best_val_score:
+                    best_val_score = epoch_val_acc
+                    print("Storing best model to {}".format(model_save_path))
+                    torch.save(coop_module.state_dict(), model_save_path)
+                    
+                    params_dict = self.params()
+                    params_dict["val_acc"] = epoch_val_acc.cpu().item()
+                    
+                    torch.save(params_dict, model_save_path.replace("best_model_", "best_params_"))                    
+                    best_preds = val_preds.cpu().numpy()
+            
                 
             print(f"Epoch {epoch_idx:5}: Acc = {total_correct / total_count:5.3f}, Loss = {total_loss / total_count:5.3f}")
-                
-                
+        
+        if self.use_best_query:
+            return best_preds
+            
+        
                 
         query_dataloader = torch.utils.data.DataLoader(query_video_paths, batch_size=self.batch_size, num_workers=0, shuffle=False)
         with torch.no_grad():

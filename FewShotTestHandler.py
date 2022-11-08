@@ -8,7 +8,7 @@ import json
 from SimilarityVLM import SimilarityVLM
 from classifier import FewShotClassifier
 from dataset import DatasetHandler, FewShotTaskDataset
-
+from pathlib import Path
 
 
 '''
@@ -20,8 +20,12 @@ TEST_RESULTS_PATH = os.path.join(FILE_DIR, "test_results.csv")
 
 
 class FewShotTestHandler:
-    def __init__(self, test_results_path: Optional[str] = TEST_RESULTS_PATH):
+    def __init__(self, test_results_path: Optional[str] = TEST_RESULTS_PATH, use_best_query: Optional[bool] = False, dataset_name: Optional[str] = "default"):
         self.test_results_path = test_results_path
+        self.use_best_query = use_best_query
+        self.num_runs = 0
+        self.dataset_name = dataset_name
+        self.category_names = None
         
         # Load results DataFrame
         if test_results_path is not None and os.path.exists(test_results_path):
@@ -72,8 +76,16 @@ class FewShotTestHandler:
         total_correct = 0
         dataset_iter = tqdm(few_shot_dataset, leave=False)
         for category_names, support_vid_paths, query_vid_paths, query_vid_labels in dataset_iter:
+            
+            self.category_names = category_names
+            
+            if self.use_best_query:
+                save_path = "fewshot_models/{}/{}/{}_way/{}_shots/best_model_{}.pth".format(classifier.name, self.dataset_name[0], n_way, n_support, self.num_runs)
+                Path(save_path[:save_path.find("best_model")]).mkdir(parents=True, exist_ok=True)
                 
-            query_predictions = classifier.predict(category_names, support_vid_paths, query_vid_paths)
+                query_predictions = classifier.predict(category_names, support_vid_paths, query_vid_paths, query_video_labels=query_vid_labels, model_save_path=save_path)
+            else:
+                query_predictions = classifier.predict(category_names, support_vid_paths, query_vid_paths)
             
             # Compute accuracy for this sampled task
             correct_predictions = np.sum(query_predictions == query_vid_labels)
@@ -84,6 +96,8 @@ class FewShotTestHandler:
             total_queries += len(query_vid_paths)
             total_correct += correct_predictions
             dataset_iter.set_postfix({"accuracy": total_correct / total_queries})
+            self.num_runs += 1
+
         
         # TODO: Look into other error/confidence-bound measures we should save
         # - Uncertainty in performance given a particular set of support videos (decreases with number of queries)
