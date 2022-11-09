@@ -1,5 +1,6 @@
 from typing import Optional
 import numpy as np
+from copy import deepcopy
 
 import torch
 from torch import nn
@@ -10,20 +11,22 @@ from SimilarityVLM import SimilarityVLM
 from similarity_metrics import Similarity
 from .base import FewShotClassifier
 
+QUERY_BATCH_SIZE = 2048 # Batch size used for iterating through non-training data
+
 '''
 Implementation of Tip-Adapter (https://arxiv.org/abs/2111.03930) for our framework.
 '''
 class TipAdapterFewShotClassifier(FewShotClassifier):
-    def __init__(self, vlm: SimilarityVLM, alpha: float, beta: float, finetune_epochs: int = 0, finetune_lr: float = 1e-3, weight_decay: float = 1e-2):
+    def __init__(self, vlm: SimilarityVLM, alpha: float, beta: float,
+                 finetune_epochs: int = 0, finetune_lr: float = 1e-3,
+                 batch_size: int = 256, random_augment: bool = True):
         self.vlm = vlm
         self.alpha = float(alpha)
         self.beta = float(beta)
         self.finetune_epochs = int(finetune_epochs)
         self.finetune_lr = float(finetune_lr)
-        self.weight_decay = float(weight_decay)
-        
-        if self.finetune_epochs == 0:
-            self.finetune_lr = 0.0
+        self.batch_size = int(batch_size)
+        self.random_augment = bool(random_augment)
         
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
@@ -36,7 +39,8 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
             "beta": self.beta,
             "finetune_epochs": self.finetune_epochs,
             "finetune_lr": self.finetune_lr,
-            "weight_decay": self.weight_decay
+            "batch_size": self.batch_size,
+            "random_augment": self.random_augment
         }
     
     '''
@@ -80,8 +84,18 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
         
         
         # Support Vid Embeddings
-        # TODO: TipAdapter averages each support embedding over 10 augments of the image (random recrop, 50% horizontal flip). Is this viable for videos?
-        flat_support_vid_embeds = np.array([self.vlm.get_video_embeds(vid_path) for vid_path in support_video_paths.flatten()])
+        # TipAdapter averages each support embedding over 10 augments of the image
+        if self.random_augment:
+            with torch.no_grad():
+                flat_support_vid_embeds = np.array([
+                    [
+                        self.vlm.video_encoder(vid_path, random_augment=True)
+                        for _ in range(10)
+                    ]
+                    for vid_path in support_video_paths.flatten()
+                ]).mean(axis=1)
+        else:
+            flat_support_vid_embeds = np.array([self.vlm.get_video_embeds(vid_path) for vid_path in support_video_paths.flatten()])
         
         # Normalize all embeddings so we can use both dot-product and euclid distance as Tip-Adapter does
         text_embeds /= np.linalg.norm(text_embeds, axis=-1, keepdims=True)
@@ -94,18 +108,38 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
         flat_support_vid_labels = torch.repeat_interleave(torch.arange(n_way), n_support)
         
         # Torch module for tip adapter
-        adapter_module = TipAdapterModule(text_embeds, flat_support_vid_embeds, flat_support_vid_labels, self.alpha, self.beta)
+        adapter_module = TipAdapterModule(text_embeds, flat_support_vid_embeds, flat_support_vid_labels, self.alpha, self.beta, self.vlm.logit_scale())
         adapter_module.to(DEVICE)
         
         if self.finetune_epochs > 0:
             # Copy support vid embeddings as a training dataset for finetuning
             train_dataset = torch.utils.data.TensorDataset(flat_support_vid_embeds, flat_support_vid_labels)
-            train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=256, num_workers=8, shuffle=True)
+            train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, num_workers=8, shuffle=True)
             
-            optimizer = torch.optim.AdamW(adapter_module.parameters(), lr=self.finetune_lr, eps=1e-4, weight_decay=self.weight_decay)
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, self.finetune_epochs * len(train_dataloader))
+            # Setup embeds for Val-Tuning Dataset
+            if val_tuning_video_paths is None or val_tuning_video_labels is None:
+                val_tuning_dataloader = None
+            else:
+                val_tuning_vid_embeds = torch.from_numpy(np.array([self.vlm.get_video_embeds(vid_path) for vid_path in val_tuning_video_paths]))
+                val_tuning_vid_embeds = F.normalize(val_tuning_vid_embeds, dim=-1)
+                val_tuning_vid_labels = torch.from_numpy(val_tuning_video_labels)
+                val_tuning_dataset = torch.utils.data.TensorDataset(val_tuning_vid_embeds, val_tuning_vid_labels)
+                val_tuning_dataloader = torch.utils.data.DataLoader(
+                    val_tuning_dataset,
+                    batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False
+                )
             
+            optimizer = torch.optim.AdamW(adapter_module.parameters(), lr=self.finetune_lr, eps=1e-4)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, self.finetune_epochs * len(train_dataloader)) # Tip Adapter does scheduling steps with each optimizer step
+            
+            # Save best-performing model (if val tuning dataset is provided)
+            val_tuning_best_acc = None
+            val_tuning_best_model_state = None
             for epoch_idx in range(self.finetune_epochs):
+                total_loss = 0
+                total_correct = 0
+                total_count = 0
+                
                 for batch_idx, (vid_embeds, vid_labels) in enumerate(train_dataloader):
                     vid_embeds = vid_embeds.to(DEVICE)
                     vid_labels = vid_labels.to(DEVICE)
@@ -113,16 +147,52 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
                     logits = adapter_module(vid_embeds)
                     loss = F.cross_entropy(logits, vid_labels)
                     
+                    total_loss += loss.item() * len(vid_embeds)
+                    total_correct += (logits.argmax(dim=1) == vid_labels).sum()
+                    total_count += len(vid_embeds)
+                    
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
                     scheduler.step()
                     
-        query_vid_embeds = query_vid_embeds.to(DEVICE)
+                # Check val-tuning performance
+                # Check val-tuning performance
+                if val_tuning_dataloader is not None:
+                    total_val_correct = 0
+                    total_val_count = 0
+                    for batch_idx, (vid_embeds, vid_labels) in enumerate(val_tuning_dataloader):
+                        vid_embeds = vid_embeds.to(DEVICE)
+                        vid_labels = vid_labels.to(DEVICE)
+                        
+                        with torch.no_grad():
+                            logits = adapter_module(vid_embeds)
+                        total_val_correct += (logits.argmax(dim=1) == vid_labels).sum()
+                        total_val_count += len(vid_embeds)
+                        
+                    val_acc = total_val_correct / total_val_count
+                    if val_tuning_best_acc is None or val_acc >= val_tuning_best_acc:
+                        val_tuning_best_acc = val_acc
+                        val_tuning_best_model_state = deepcopy(adapter_module.state_dict())
+                    print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Val-Tune Acc = {val_acc:5.3f}, Loss = {total_loss / total_count:5.3f}")
+                else:
+                    print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Loss = {total_loss / total_count:5.3f}")
+                       
+            # Reload best val-tuning model state
+            if val_tuning_best_model_state is not None:
+                adapter_module.load_state_dict(val_tuning_best_model_state)
+            
+            
+                    
+        query_embed_dataloader = torch.utils.data.DataLoader(query_vid_embeds, batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
+        query_predictions = []
         with torch.no_grad():
-            query_logits = adapter_module(query_vid_embeds).cpu().numpy()
-        query_predictions = np.argmax(query_logits, axis=1)
-        return query_predictions
+            for batch_idx, vid_embeds in enumerate(query_embed_dataloader):
+                vid_embeds = vid_embeds.to(DEVICE)
+                logits = adapter_module(vid_embeds)
+                query_predictions.append(logits.argmax(dim=1))
+            query_predictions = torch.cat(query_predictions, dim=0)
+        return query_predictions.cpu().numpy()
         
                 
         
@@ -130,12 +200,15 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
 class TipAdapterModule(nn.Module):
     def __init__(self, text_embeds: torch.tensor,
                  flat_support_vid_embeds: torch.tensor, flat_support_vid_labels: torch.tensor,
-                 alpha: float, beta: float):
+                 alpha: float, beta: float, vlm_logit_scale: float):
         super().__init__()
         
         # Hyperparameters
         self.alpha = alpha
         self.beta = beta
+        
+        # VLM-specific value
+        self.vlm_logit_scale = vlm_logit_scale
         
         # "Cache keys", computes affinity between query video embedding and support video embeddings
         self.cache_keys = nn.Parameter(flat_support_vid_embeds)
@@ -157,7 +230,7 @@ class TipAdapterModule(nn.Module):
         affinity = embeds @ self.cache_keys.T
         cache_logits = (-1 * self.beta * (1 - affinity)).exp() @ self.cache_values
         
-        text_logits = 100 * embeds @ self.text_embeds.T
+        text_logits = self.vlm_logit_scale * embeds @ self.text_embeds.T
         
         tip_logits = text_logits + self.alpha * cache_logits
         

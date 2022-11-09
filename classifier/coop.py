@@ -11,7 +11,7 @@ from SimilarityVLM import SimilarityVLM
 from similarity_metrics import Similarity
 from .base import FewShotClassifier
 
-QUERY_BATCH_SIZE = 1024 # Batch size used for iterating through non-training data
+QUERY_BATCH_SIZE = 2048 # Batch size used for iterating through non-training data
 
 '''
 Implementation of CoOp (https://arxiv.org/abs/2109.01134) for our framework.
@@ -101,7 +101,7 @@ class CoopFewShotClassifier(FewShotClassifier):
         else:
             val_tuning_dataloader = torch.utils.data.DataLoader(
                 list(zip(val_tuning_video_paths, val_tuning_video_labels)),
-                batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=True
+                batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False
             )
         
         coop_module = SharedContextCoopModule(self.vlm, category_names, self.context_len)
@@ -184,10 +184,10 @@ class CoopFewShotClassifier(FewShotClassifier):
                 if val_tuning_best_acc is None or val_acc >= val_tuning_best_acc:
                     val_tuning_best_acc = val_acc
                     val_tuning_best_model_state = deepcopy(coop_module.state_dict())
+                print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Val-Tune Acc = {val_acc:5.3f}, Loss = {total_loss / total_count:5.3f}")
             else:
-                val_acc = None
+                print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Loss = {total_loss / total_count:5.3f}")
                 
-            print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Val-Tune Acc = {val_acc:5.3f}, Loss = {total_loss / total_count:5.3f}")
                 
                 
                 

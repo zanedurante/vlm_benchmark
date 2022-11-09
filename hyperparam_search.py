@@ -15,8 +15,8 @@ from plotting_utils import plot
 VLM_ARG = sys.argv[1]
 CLASSIFIER_ARG = sys.argv[2]
 
-N_HYPERPARAM_SEARCH_CALLS = 32
-SEARCH_METHOD = "random" # gp, forest, random
+N_HYPERPARAM_SEARCH_CALLS = 64 # Max number of hyperparam values tested for each dataset/n_shot combo
+SEARCH_METHOD = "grid" # gp, forest, random
 USE_VAL_TUNING = True
 
 
@@ -28,12 +28,12 @@ Test Setup
 test_params_dict = {}
 
 # Dataset Params - dataset.____ keys are passed into DatasetHandler constructor
-test_params_dict["dataset.name"] = ["smsm", "kinetics_100"]
+test_params_dict["dataset.name"] = ["smsm"]#, "kinetics_100", "moma_act", "moma_sact"]
 test_params_dict["dataset.split_type"] = ["video"]
 
 # Few-Shot Test Params - test.____ keys are passed into few-shot test call
 test_params_dict["test.n_way"] = [None] # None value gets manually converted to the max size for each dataset
-test_params_dict["test.n_support"] = [1, 2, 4, 8, 16]#, 32, 64]
+test_params_dict["test.n_support"] = [1, 2, 4, 8, 16]
 test_params_dict["test.n_query"] = [None]
 test_params_dict["test.n_episodes"] = [4]
 
@@ -102,41 +102,45 @@ elif CLASSIFIER_ARG == "subvideo":
     from classifier import SubVideoAverageFewShotClassifier as Classifier
 elif CLASSIFIER_ARG == "tip_adapter":
     from classifier import TipAdapterFewShotClassifier as Classifier
-    classifier_hyperparams.append(skopt.space.Real(
-        1, 1000,
-        name="alpha", prior="log-uniform"
-    ))
-    classifier_hyperparams.append(skopt.space.Real(
-        1, 50,
-        name="beta", prior="log-uniform"
-    ))
-    classifier_hyperparams.append(skopt.space.Real(
-        1e-5, 1e-1,
-        name="finetune_lr", prior="log-uniform"
+    fixed_classifier_kwargs["finetune_epochs"] = 20
+    fixed_classifier_kwargs["random_augment"] = False
+    
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [1e0, 1e1, 1e2, 1e3],
+        name="alpha"
     ))
     classifier_hyperparams.append(skopt.space.Categorical(
-        [0, 5, 20],
-        name="finetune_epochs"
+        [4.0, 5.5, 7.0],
+        name="beta"
     ))
-    '''
-    classifier_hyperparams.append(skopt.space.Real(
-        1e-5, 1e-1,
-        name="weight_decay", prior="log-uniform"
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [1e-4, 1e-3, 1e-2],
+        name="finetune_lr"
     ))
-    '''
 elif CLASSIFIER_ARG == "smsm_object_oracle":
     from classifier.smsm_object_oracle import SmsmObjectOracleFewShotClassifier as Classifier
 elif CLASSIFIER_ARG == "coop":
     from classifier.coop import CoopFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
     fixed_classifier_kwargs["batch_size"] = 8
-    fixed_classifier_kwargs["optimizer"] = "adam"
-    fixed_classifier_kwargs["epochs"] = 10
+    fixed_classifier_kwargs["optimizer"] = "sgd"
+    fixed_classifier_kwargs["epochs"] = 50
     
+    ORIG_COOP_BATCH_SIZE = 32
+    ORIG_COOP_LR = 2e-3
+    equiv_lr = ORIG_COOP_LR / ORIG_COOP_BATCH_SIZE * fixed_classifier_kwargs["batch_size"]
+    
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [0.5 * equiv_lr, equiv_lr, 2 * equiv_lr, 4 * equiv_lr, 8 * equiv_lr],
+        name="lr"
+    ))
+    
+    '''
     classifier_hyperparams.append(skopt.space.Real(
         1e-4, 1e-1,
         name="lr", prior="log-uniform"
     ))
+    '''
     '''
     classifier_hyperparams.append(skopt.space.Categorical(
         [5, 10, 20],
@@ -155,16 +159,20 @@ elif CLASSIFIER_ARG == "cona":
     from classifier.cona import CoNaFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
     fixed_classifier_kwargs["batch_size"] = 8
-    fixed_classifier_kwargs["optimizer"] = "adam"
-    fixed_classifier_kwargs["epochs"] = 10
+    fixed_classifier_kwargs["optimizer"] = "sgd"
+    fixed_classifier_kwargs["epochs"] = 50
     
-    classifier_hyperparams.append(skopt.space.Real(
-        1e-4, 1e-1,
-        name="lr", prior="log-uniform"
+    ORIG_COOP_BATCH_SIZE = 32
+    ORIG_COOP_LR = 2e-3
+    equiv_lr = ORIG_COOP_LR / ORIG_COOP_BATCH_SIZE * fixed_classifier_kwargs["batch_size"]
+    
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [0.5 * equiv_lr, equiv_lr, 2 * equiv_lr, 8 * equiv_lr],
+        name="lr"
     ))
-    classifier_hyperparams.append(skopt.space.Real(
-        1e4, 1e9,
-        name="name_regularization", prior="log-uniform"
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [1e4, 1e6, 1e8],
+        name="name_regularization"
     ))
     '''
     classifier_hyperparams.append(skopt.space.Categorical(
@@ -292,6 +300,7 @@ for test_params in pbar:
         
     # Find any previous val runs which shall be fed into skopt hyperparam search alg
     # Possible since hyperparameter spaces are named to match names in results csvs, which cover all vlm and classifier parameters
+    # Only used for skopt search methods
     prev_val_run_results = filter_test_results(
         val_run_handler.results,
         dict(
@@ -324,6 +333,51 @@ for test_params in pbar:
         for _ in range(N_HYPERPARAM_SEARCH_CALLS):
             val_neg_accuracy([hyper.rvs(1)[0] for hyper in hyperparam_space])
             skopt_pbar.update(1)
+    elif SEARCH_METHOD == "grid":
+        categorical_hyperparams = [hyper for hyper in hyperparam_space if type(hyper) is skopt.space.space.Categorical]
+        other_hyperparams = [hyper for hyper in hyperparam_space if type(hyper) is not skopt.space.space.Categorical]
+        
+        # Grid must iterate over all selected categories
+        runs_per_category_choice = N_HYPERPARAM_SEARCH_CALLS
+        for hyper in categorical_hyperparams:
+            runs_per_category_choice = runs_per_category_choice // len(hyper.categories)
+        
+        if runs_per_category_choice == 0:
+            raise ValueError(f"Too many categorical hyperparameters to iterate over all choices without exceeding {N_HYPERPARAM_SEARCH_CALLS} runs.")
+        
+        if len(other_hyperparams) == 0:
+            discretized_hyperparam_space = [hyper.categories for hyper in hyperparam_space]
+        else:
+            samples_per_cont_hyper = int(np.power(runs_per_category_choice, 1 / len(other_hyperparams)))
+            
+            if samples_per_cont_hyper == 0:
+                raise ValueError(f"Too many hyperparameters to iterate over all categories and still choose multiple values per continuous space, without exceeding {N_HYPERPARAM_SEARCH_CALLS} runs.")
+            
+            discretized_hyperparam_space = []
+            for hyper in hyperparam_space:
+                if type(hyper) is skopt.space.space.Categorical:
+                    discretized_hyperparam_space.append(hyper.categories)
+                elif type(hyper) in [skopt.space.space.Real, skopt.space.space.Integer]:
+                    if hyper.prior == "log-uniform":
+                        hyper_samples = np.logspace(np.log10(hyper.low), np.log10(hyper.high), num=samples_per_cont_hyper, endpoint=True)
+                    else:
+                        hyper_samples = np.linspace(hyper.low, hyper.high, num=samples_per_cont_hyper, endpoint=True)
+                    
+                    if type(hyper) is skopt.space.space.Integer:
+                        hyper_samples = np.round(hyper_samples)
+                        
+                    discretized_hyperparam_space.append(hyper_samples)
+                else:
+                    raise NotImplementedError
+            
+        hyperparam_value_iter = list(itertools.product(*discretized_hyperparam_space))
+        skopt_pbar.total = len(hyperparam_value_iter)
+        for i, hyperparam_values in enumerate(hyperparam_value_iter):
+            val_neg_accuracy(hyperparam_values)
+            skopt_pbar.update(1)
+        
+    else:
+        raise NotImplementedError
     
     
     '''
