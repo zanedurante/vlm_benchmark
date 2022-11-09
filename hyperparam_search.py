@@ -15,6 +15,12 @@ from plotting_utils import plot
 VLM_ARG = sys.argv[1]
 CLASSIFIER_ARG = sys.argv[2]
 
+dataset_name = ["smsm", "kinetics_100"]
+if len(sys.argv) > 3:
+    dataset_name = [sys.argv[3]]
+
+
+
 N_HYPERPARAM_SEARCH_CALLS = 32
 SEARCH_METHOD = "random" # gp, forest, random
 USE_VAL_TUNING = True
@@ -28,7 +34,7 @@ Test Setup
 test_params_dict = {}
 
 # Dataset Params - dataset.____ keys are passed into DatasetHandler constructor
-test_params_dict["dataset.name"] = ["smsm", "kinetics_100"]
+test_params_dict["dataset.name"] = dataset_name
 test_params_dict["dataset.split_type"] = ["video"]
 
 # Few-Shot Test Params - test.____ keys are passed into few-shot test call
@@ -128,13 +134,13 @@ elif CLASSIFIER_ARG == "smsm_object_oracle":
     from classifier.smsm_object_oracle import SmsmObjectOracleFewShotClassifier as Classifier
 elif CLASSIFIER_ARG == "coop":
     from classifier.coop import CoopFewShotClassifier as Classifier
-    fixed_classifier_kwargs["random_augment"] = False
-    fixed_classifier_kwargs["batch_size"] = 8
-    fixed_classifier_kwargs["optimizer"] = "adam"
+    fixed_classifier_kwargs["random_augment"] = True
+    fixed_classifier_kwargs["batch_size"] = 1
+    fixed_classifier_kwargs["optimizer"] = "sgd"
     fixed_classifier_kwargs["epochs"] = 10
     
     classifier_hyperparams.append(skopt.space.Real(
-        1e-4, 1e-1,
+        1e-4, 1e-2,
         name="lr", prior="log-uniform"
     ))
     '''
@@ -154,8 +160,8 @@ elif CLASSIFIER_ARG == "coop":
 elif CLASSIFIER_ARG == "cona":
     from classifier.cona import CoNaFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
-    fixed_classifier_kwargs["batch_size"] = 8
-    fixed_classifier_kwargs["optimizer"] = "adam"
+    fixed_classifier_kwargs["batch_size"] = 1
+    fixed_classifier_kwargs["optimizer"] = "sgd"
     fixed_classifier_kwargs["epochs"] = 10
     
     classifier_hyperparams.append(skopt.space.Real(
@@ -163,7 +169,7 @@ elif CLASSIFIER_ARG == "cona":
         name="lr", prior="log-uniform"
     ))
     classifier_hyperparams.append(skopt.space.Real(
-        1e4, 1e9,
+        1e6, 1e9,
         name="name_regularization", prior="log-uniform"
     ))
     '''
