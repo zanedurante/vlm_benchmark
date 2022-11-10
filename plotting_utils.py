@@ -1,4 +1,5 @@
-from typing import Any, Callable
+from typing import Any, Callable, Optional
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,7 +9,7 @@ import matplotlib.pyplot as plt
 '''
 Filter the given dataframe based on a dictionary of allowed column values
 '''
-def filter(results: pd.DataFrame, filter: dict) -> pd.DataFrame:
+def filter_results(results: pd.DataFrame, filter: dict) -> pd.DataFrame:
     filtered_indices = np.ones(len(results)).astype(bool)
     for filter_col, filter_val_list in filter.items():
         if filter_col not in results.columns:
@@ -19,12 +20,18 @@ def filter(results: pd.DataFrame, filter: dict) -> pd.DataFrame:
         valid_col_indices = np.zeros(len(results)).astype(bool)
         for filter_val in filter_val_list:
             if pd.isna(filter_val): # Special handling required to check for nan results (which imply that the column was not filled for this row)
-                valid_col_indices = valid_col_indices | pd.isna(results[filter_col])
+                valid_col_indices |= pd.isna(results[filter_col])
             else:
-                valid_col_indices = valid_col_indices | (results[filter_col] == filter_val)
-        filtered_indices = filtered_indices & valid_col_indices
+                valid_col_indices |= (results[filter_col] == filter_val)
+        filtered_indices &= valid_col_indices
         
     return results[filtered_indices]
+
+'''
+Concatenate two results dataframes together
+'''
+def combine_results(*results: pd.DataFrame) -> pd.DataFrame:
+    return pd.concat(results, ignore_index=True)
 
 '''
 Group dataframe such that the given columns are aggregated into lists, one for every unique value of
@@ -62,15 +69,25 @@ def column_value_formatter(col: str, val: Any) -> str:
         }
         return transform.get(val, val)
     
+    if col == "classifier_class":
+        transform = {
+            "HardPromptFewShotClassifier": "VL-Prototype",
+            "CoopFewShotClassifier": "CoOp",
+            "CoNaFewShotClassifier": "CoNa (Ours)"
+        }
+        return transform.get(val, val)
+    
     if col == "query_dataset":
         val = val.split(".")
         name = val[0]
         split_type = val[1]
         split = val[2]
         if len(val) == 3:
+            min_train_vids = None
             class_limit = None
         else:
-            class_limit = val[3]
+            min_train_vids = val[3]
+            class_limit = val[4]
             
         transform = {
             "kinetics_100": "Kinetics-100",
@@ -80,11 +97,19 @@ def column_value_formatter(col: str, val: Any) -> str:
         }
         
         result = transform.get(name, name)
-        result += f" ({split_type})"
+        if split_type == "v":
+            pass
+        elif split_type == "c":
+            result += " (few-shot)"
+        else:
+            raise NotImplementedError
+        
         if split != "all":
             result += f" ({split})"
+        if min_train_vids is not None:
+            result += f" ({min_train_vids} vid min)"
         if class_limit is not None:
-            result += f" ({class_limit}-class)"
+            result += f" ({class_limit} class max)"
         return result
     
     if col == "n_way":
@@ -126,16 +151,21 @@ Args:
     filter_dict ({str -> [Any]}):   Dictionary from column names to allowed values. Filter will be applied after aggregation,
                                     except for any columns which would be aggregated out.
     show_error_bars (bool):         Whether to display error bars when y-axis is 'accuracy'. Error bars will show standard error.
+    savedir (Optional[str], optional): Optional directory path in which plots will be saved.
 '''
 def plot(results: pd.DataFrame, x_col: str, y_col: str, plot_descriptor_cols: list, line_descriptor_cols: list,
-         agg_dict: dict = {}, filter_dict: dict = {}, show_error_bars: bool = False):
+         agg_dict: dict = {}, filter_dict: dict = {}, show_error_bars: bool = False, savedir: Optional[str] = None):
     pre_agg_filter_dict = {col: vals for col, vals in filter_dict.items() if col in agg_dict.keys()}
     post_agg_filter_dict = {col: vals for col, vals in filter_dict.items() if col not in agg_dict.keys()}
     
-    results = filter(results, pre_agg_filter_dict)
+    results = filter_results(results, pre_agg_filter_dict)
     for agg_col, agg_func in agg_dict.items():
         results = aggregate(results, agg_col, agg_func)
-    results = filter(results, post_agg_filter_dict)
+    results = filter_results(results, post_agg_filter_dict)
+    
+    # Create directory for plots if needed
+    if savedir is not None:
+        os.makedirs(savedir, exist_ok=True)
     
     # Group around all unique line identifiers (plot_descriptors + line_descriptors), then aggregate x_col and y_col into lists
     grouped_results = results.sort_values(x_col).groupby(plot_descriptor_cols + line_descriptor_cols, as_index=False, dropna=False).agg(list)
@@ -183,4 +213,9 @@ def plot(results: pd.DataFrame, x_col: str, y_col: str, plot_descriptor_cols: li
             ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
         else:
             ax.legend()
+            
+        # Save plot if needed
+        if savedir is not None:
+            fig.savefig(os.path.join(savedir, f"plot_{plot_ind}.png"), facecolor="white")
+            
         fig.show()

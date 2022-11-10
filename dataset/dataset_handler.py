@@ -23,6 +23,8 @@ KINETICS_100_DIR = "/home/datasets/kinetics_100"
 SMSM_DIR = "/home/datasets/smsm_cmn"
 MOMA_DIR = "/home/datasets/moma"
 
+DEFAULT_MIN_TRAIN_VIDS = 16
+
 
 
 '''
@@ -70,7 +72,7 @@ class SequentialCategoryNameDataset(torch.utils.data.Dataset):
 
 
 class DatasetHandler:
-    def __init__(self, name: str, split: str = "val", split_type: str = "video", class_limit: Optional[int] = None, min_train_videos: int = 16):
+    def __init__(self, name: str, split: str = "val", split_type: str = "video", class_limit: Optional[int] = None, min_train_videos: int = DEFAULT_MIN_TRAIN_VIDS):
         self.name = name
         self.split = split
         self.split_type = split_type
@@ -193,8 +195,10 @@ class DatasetHandler:
         else:
             out = f"{self.name}.v.{self.split}"
             
-        if self.class_limit is not None:
-            out += f".{self.class_limit}"
+        # Only include extra info if these uncommon vars are non-default
+        if self.min_train_videos != DEFAULT_MIN_TRAIN_VIDS or self.class_limit is not None:
+            out += f".vidmin_{self.min_train_videos}"
+            out += f".classmax_{self.class_limit}"
             
         return out
             
