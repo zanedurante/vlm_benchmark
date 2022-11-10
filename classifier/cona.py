@@ -37,7 +37,7 @@ class CoNaFewShotClassifier(FewShotClassifier):
         self.random_augment = bool(random_augment)
         
         assert opt_strat in ["joint"], "Invalid optimization strategy."
-        assert optimizer in ["sgd", "adam"], "Invalid optimizer choice."
+        assert optimizer in ["sgd", "adam", "adamw"], "Invalid optimizer choice."
         
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
@@ -115,10 +115,16 @@ class CoNaFewShotClassifier(FewShotClassifier):
         cona_module = CoNaModule(self.vlm, category_names, self.context_len)
         cona_module.to(DEVICE)
         
+        optim_input = [
+            {"params": cona_module.name_perturbation, "weight_decay": self.name_regularization},
+            {"params": [param for name, param in cona_module.named_parameters() if name not in ["name_perturbation"]]}
+        ]
         if self.optimizer == "sgd":
-            optimizer = torch.optim.SGD(cona_module.parameters(), lr=self.lr)
+            optimizer = torch.optim.SGD(optim_input, lr=self.lr, weight_decay=0)
         elif self.optimizer == "adam":
-            optimizer = torch.optim.Adam(cona_module.parameters(), lr=self.lr)
+            optimizer = torch.optim.Adam(optim_input, lr=self.lr, weight_decay=0)
+        elif self.optimizer == "adamw":
+            optimizer = torch.optim.AdamW(optim_input, lr=self.lr, weight_decay=0)
         else:
             raise NotImplementedError
         
@@ -163,16 +169,15 @@ class CoNaFewShotClassifier(FewShotClassifier):
                 
                 logits = cona_module(vid_embeds)
                 loss = F.cross_entropy(logits, vid_labels)
-                reg_loss = self.name_regularization * cona_module.name_perturbation.pow(2).mean()
-                combined_loss = loss + reg_loss
                 
                 total_loss += loss.item() * len(vid_paths)
-                total_reg_loss += reg_loss.item() * len(vid_paths)
+                with torch.no_grad():
+                    total_reg_loss += 0.5 * self.name_regularization * cona_module.name_perturbation.pow(2).sum() * len(vid_paths)
                 total_correct += (logits.argmax(dim=1) == vid_labels).sum()
                 total_count += len(vid_paths)
                 
                 optimizer.zero_grad()
-                combined_loss.backward()
+                loss.backward()
                 optimizer.step()
             scheduler.step()
             
@@ -197,9 +202,9 @@ class CoNaFewShotClassifier(FewShotClassifier):
                     val_tuning_best_acc = val_acc
                     val_tuning_best_model_state = deepcopy(cona_module.state_dict())
                     
-                print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Val-Tune Acc = {total_val_correct / total_val_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Reg Loss = {total_reg_loss / total_count:5.3E}")
+                print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Val-Tune Acc = {total_val_correct / total_val_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Reg Loss = {total_reg_loss / total_count:5.3E}, Combined Loss = {(total_loss + total_reg_loss) / total_count:5.3E}")
             else:
-                print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Reg Loss = {total_reg_loss / total_count:5.3E}")
+                print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Reg Loss = {total_reg_loss / total_count:5.3E}, Combined Loss = {(total_loss + total_reg_loss) / total_count:5.3E}")
                 
                 
                 
