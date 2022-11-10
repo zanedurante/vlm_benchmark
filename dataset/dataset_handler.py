@@ -178,16 +178,18 @@ class DatasetHandler:
                 del self.data_dict[extra_class]
                 
         # Remove classes which have too few training examples
-        # TODO: Determine better way to make this consistent across splits
-        if split == "train":
-            for cat in list(self.data_dict.keys()):
-                if len(self.data_dict[cat]) < min_train_videos:
-                    del self.data_dict[cat]
-        else:
-            train_dataset = DatasetHandler(name, split="train", split_type=split_type, class_limit=class_limit, min_train_videos=min_train_videos)
-            for cat in list(self.data_dict.keys()):
-                if cat not in train_dataset.data_dict.keys():
-                    del self.data_dict[cat]
+        # min_train_videos field only has an effect on split_type="video" datasets, where the classes are the same across splits
+        if self.split_type == "video" and min_train_videos > 1:
+            # TODO: Determine better way to make this consistent across splits
+            if split == "train":
+                for cat in list(self.data_dict.keys()):
+                    if len(self.data_dict[cat]) < min_train_videos:
+                        del self.data_dict[cat]
+            else:
+                train_dataset = DatasetHandler(name, split="train", split_type=split_type, class_limit=class_limit, min_train_videos=min_train_videos)
+                for cat in list(self.data_dict.keys()):
+                    if cat not in train_dataset.data_dict.keys():
+                        del self.data_dict[cat]
         
     def id(self) -> str:
         if self.split_type == "class":
