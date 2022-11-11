@@ -29,6 +29,8 @@ argparser.add_argument("-s", "--n_shots", nargs="+", type=int, default=[1,2,4,8,
                        help="Number of shots to run on.")
 argparser.add_argument("--val_tuning", type=bool, default=True,
                        help="Whether or not the final trained classifier is reloaded from the epoch with the best val performance")
+argparser.add_argument("-f", "--file", default=None,
+                       help="Optional specific filename to save results csv to")
 args, unknown_args_list = argparser.parse_known_args()
 
 # Attempt to parse unknown args as vlm/classifier parameter overrides, like "--classifier.epochs 5 10 20"
@@ -145,8 +147,10 @@ for key, vals in unknown_args.items():
         params_dict[key] = vals
 
 
-
-run_handler = FewShotTestHandler(f"experiment.{Classifier.__name__}.{VLM.__name__}.csv")
+if args.file is None:
+    run_handler = FewShotTestHandler(f"experiment.{Classifier.__name__}.{VLM.__name__}.csv")
+else:
+    run_handler = FewShotTestHandler(args.file)
 
 query_dataset = None
 support_dataset = None
