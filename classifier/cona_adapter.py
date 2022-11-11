@@ -14,28 +14,34 @@ from .base import FewShotClassifier
 QUERY_BATCH_SIZE = 2048 # Batch size used for iterating through non-training data
 
 '''
-Implementation of CoOp (https://arxiv.org/abs/2109.01134) for our framework.
+Implementation of our algorithm: Context Name Optimization + TIP Adapter.
 '''
-class CoopFewShotClassifier(FewShotClassifier):
-    def __init__(self, vlm: SimilarityVLM, context_len: int = 16, lr: float = 1e-3, epochs: int = 10,
-                 warmup_lr: float = 1e-5, warmup_epochs: int = 1, batch_size: int = 1, optimizer: str = "sgd",
+class CoNaTipAdapterFewShotClassifier(FewShotClassifier):
+    def __init__(self, vlm: SimilarityVLM, context_len: int = 16, 
+                 name_regularization: float = 1e-2,
+                 lr: float = 1e-3, epochs: int = 10,
+                 adapter_lr_multiplier: float = 1, adapter_regularization: float = 0,
+                 alpha: float = 1.0, beta: float = 5.5,
+                 warmup_lr: float = 1e-5, warmup_epochs: int = 1, 
+                 batch_size: int = 1, optimizer: str = "sgd",
                  random_augment: bool = True):
         self.vlm = vlm
         
         self.context_len = int(context_len)
+        self.name_regularization = float(name_regularization)
         self.lr = float(lr)
         self.epochs = int(epochs)
+        self.adapter_lr_multiplier = float(adapter_lr_multiplier)
+        self.adapter_regularization = float(adapter_regularization)
+        self.alpha = float(alpha)
+        self.beta = float(beta)
         self.warmup_lr = float(warmup_lr)
         self.warmup_epochs = float(warmup_epochs)
         self.batch_size = int(batch_size)
         self.optimizer = str(optimizer)
         self.random_augment = bool(random_augment)
         
-        assert optimizer in ["sgd", "adam"], "Invalid optimizer choice"
-        
-        # Save the latest progression of tuned class embeddings over epochs for visualization
-        # {class name -> [orig text embed, tuned text embed epoch 0, epoch 1, ...]}
-        self.text_embed_training_record = {}
+        assert optimizer in ["sgd", "adam", "adamw"], "Invalid optimizer choice."
         
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
@@ -45,8 +51,13 @@ class CoopFewShotClassifier(FewShotClassifier):
     def params(self) -> dict:
         return {
             "context_len": self.context_len,
+            "name_regularization": self.name_regularization,
             "lr": self.lr,
             "epochs": self.epochs,
+            "adapter_lr_multiplier": self.adapter_lr_multiplier,
+            "adapter_regularization": self.adapter_regularization,
+            "alpha": self.alpha,
+            "beta": self.beta,
             "warmup_lr": self.warmup_lr,
             "warmup_epochs": self.warmup_epochs,
             "batch_size": self.batch_size,
@@ -92,12 +103,7 @@ class CoopFewShotClassifier(FewShotClassifier):
             query_predictions = np.argmax(query_to_text_similarities, axis=1)
             return query_predictions
         
-        # Save original text embeds for visualization
-        # Tuned text embeds will be added to this list
-        self.text_embed_training_record = {
-            name: [self.vlm.get_text_embeds(name)]
-            for name in category_names
-        }
+        
         
         train_dataloader = torch.utils.data.DataLoader(
             list(zip(support_video_paths.flatten(), torch.repeat_interleave(torch.arange(n_way), n_support))),
@@ -113,13 +119,28 @@ class CoopFewShotClassifier(FewShotClassifier):
                 batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False
             )
         
-        coop_module = SharedContextCoopModule(self.vlm, category_names, self.context_len)
-        coop_module.to(DEVICE)
+        # Pass support vid embeds and labels for initializing adapter layers
+        # TODO: Allow option to average over multiple random augments to determine initialization (as done in TIP-Adapter)
+        support_vid_embeds = torch.from_numpy(np.array([
+            self.vlm.get_video_embeds(vid_path)
+            for vid_path in support_video_paths.flatten()
+        ]))
+        support_vid_labels = torch.arange(n_way).repeat_interleave(n_support)
+        module = CoNaTipAdapterModule(self.vlm, category_names, support_vid_embeds, support_vid_labels, self.context_len, self.alpha, self.beta)
+        module.to(DEVICE)
         
+        
+        optim_input = [
+            {"params": module.name_perturbation, "weight_decay": self.name_regularization},
+            {"params": module.cache_keys, "lr": self.lr * self.adapter_lr_multiplier, "weight_decay": self.adapter_regularization},
+            {"params": [param for name, param in module.named_parameters() if name not in ["name_perturbation", "cache_keys"]]}
+        ]
         if self.optimizer == "sgd":
-            optimizer = torch.optim.SGD(coop_module.parameters(), lr=self.lr)
+            optimizer = torch.optim.SGD(optim_input, lr=self.lr, weight_decay=0)
         elif self.optimizer == "adam":
-            optimizer = torch.optim.Adam(coop_module.parameters(), lr=self.lr)
+            optimizer = torch.optim.Adam(optim_input, lr=self.lr, weight_decay=0)
+        elif self.optimizer == "adamw":
+            optimizer = torch.optim.AdamW(optim_input, lr=self.lr, weight_decay=0)
         else:
             raise NotImplementedError
         
@@ -145,6 +166,8 @@ class CoopFewShotClassifier(FewShotClassifier):
         val_tuning_best_model_state = None
         for epoch_idx in range(self.epochs):
             total_loss = 0
+            #total_name_reg_loss = 0
+            #total_adapter_reg_loss = 0
             total_correct = 0
             total_count = 0
             
@@ -161,15 +184,20 @@ class CoopFewShotClassifier(FewShotClassifier):
                     ], dim=0)
                 vid_labels = vid_labels.to(DEVICE)
                 
-                logits = coop_module(vid_embeds)
+                logits = module(vid_embeds)
                 loss = F.cross_entropy(logits, vid_labels)
+                #name_reg_loss = self.name_regularization * module.name_perturbation.pow(2).sum(dim=-1).mean()
+                #adapter_reg_loss = self.adapter_regularization * module.cache_keys.pow(2).sum(dim=-1).mean()
+                combined_loss = loss# + name_reg_loss + adapter_reg_loss
                 
                 total_loss += loss.item() * len(vid_paths)
+                #total_name_reg_loss += name_reg_loss.item() * len(vid_paths)
+                #total_adapter_reg_loss += adapter_reg_loss.item() * len(vid_paths)
                 total_correct += (logits.argmax(dim=1) == vid_labels).sum()
                 total_count += len(vid_paths)
                 
                 optimizer.zero_grad()
-                loss.backward()
+                combined_loss.backward()
                 optimizer.step()
             scheduler.step()
             
@@ -185,28 +213,27 @@ class CoopFewShotClassifier(FewShotClassifier):
                     vid_labels = vid_labels.to(DEVICE)
                     
                     with torch.no_grad():
-                        logits = coop_module(vid_embeds)
+                        logits = module(vid_embeds)
                     total_val_correct += (logits.argmax(dim=1) == vid_labels).sum()
                     total_val_count += len(vid_paths)
                     
                 val_acc = total_val_correct / total_val_count
                 if val_tuning_best_acc is None or val_acc >= val_tuning_best_acc:
                     val_tuning_best_acc = val_acc
-                    val_tuning_best_model_state = deepcopy(coop_module.state_dict())
-                print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Val-Tune Acc = {val_acc:5.3f}, Loss = {total_loss / total_count:5.3f}")
+                    val_tuning_best_model_state = deepcopy(module.state_dict())
+                    
+                #print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Val-Tune Acc = {total_val_correct / total_val_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Name Reg Loss = {total_name_reg_loss / total_count:5.3E}, Adapter Reg Loss = {total_adapter_reg_loss / total_count:5.3E}")
+                print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Val-Tune Acc = {total_val_correct / total_val_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Name Mag: {module.name_perturbation.pow(2).sum(dim=-1).sqrt().mean():5.3E}, Adapter Mag = {module.cache_keys.pow(2).sum(dim=-1).sqrt().mean():5.3E}")
             else:
-                print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Loss = {total_loss / total_count:5.3f}")
+                #print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Name Reg Loss = {total_name_reg_loss / total_count:5.3E}, Adapter Reg Loss = {total_adapter_reg_loss / total_count:5.3E}")
+                print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Name Mag: {module.name_perturbation.pow(2).sum(dim=-1).sqrt().mean():5.3E}, Adapter Mag = {module.cache_keys.pow(2).sum(dim=-1).sqrt().mean():5.3E}")
+            
                 
-            # Save tuned text output embeds into record
-            with torch.no_grad():
-                text_embeds = coop_module.tuned_text_embeds().cpu().numpy()
-                for i, name in enumerate(category_names):
-                    self.text_embed_training_record[name].append(text_embeds[i])
                 
                 
         # Reload best val-tuning model state
         if val_tuning_best_model_state is not None:
-            coop_module.load_state_dict(val_tuning_best_model_state)
+            module.load_state_dict(val_tuning_best_model_state)
                 
         query_dataloader = torch.utils.data.DataLoader(query_video_paths, batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
         with torch.no_grad():
@@ -216,7 +243,7 @@ class CoopFewShotClassifier(FewShotClassifier):
                     torch.from_numpy(self.vlm.get_video_embeds(vid_path)).unsqueeze(0).to(DEVICE)
                     for vid_path in vid_paths
                 ])
-                batch_query_logits = coop_module(batch_query_vid_embeds)
+                batch_query_logits = module(batch_query_vid_embeds)
                 query_predictions.append(torch.argmax(batch_query_logits, dim=1))
             query_predictions = torch.cat(query_predictions, dim=0)
             return query_predictions.cpu().numpy()
@@ -224,29 +251,72 @@ class CoopFewShotClassifier(FewShotClassifier):
                 
         
         
-class SharedContextCoopModule(nn.Module):
-    def __init__(self, vlm: SimilarityVLM, category_names: np.ndarray, context_len: int = 16):
+class CoNaTipAdapterModule(nn.Module):
+    def __init__(self, vlm: SimilarityVLM, category_names: np.ndarray,
+                 flat_support_vid_embeds: torch.Tensor, flat_support_vid_labels: torch.Tensor,
+                 context_len: int, alpha: float, beta: float):
         super().__init__()
         
         self.vlm = vlm
         self.category_names = category_names
         
-        with torch.no_grad():
-            self.category_name_input_embeds, self.category_name_attn_masks = vlm.get_input_word_embeddings(category_names.tolist())
-        
         # Hyperparameters
         self.context_len = context_len
+        self.alpha = alpha
+        self.beta = beta
         
+        '''
+        CoNa Setup
+        '''
+        # Orig name input embeddings
+        with torch.no_grad():
+            category_name_input_embeds, category_name_attn_masks = vlm.get_input_word_embeddings(category_names.tolist())
+        self.register_buffer("category_name_input_embeds", category_name_input_embeds)
+        self.register_buffer("category_name_attn_masks", category_name_attn_masks)
+        
+        # Class-shared context embeddings
         context = torch.empty(1, self.context_len, vlm.input_word_embed_dim())
         nn.init.normal_(context, std=0.02)
         self.context = nn.Parameter(context)
         
-    def tuned_text_embeds(self):
+        # Class-specific name embedding tweaks
+        #name_perturbation = torch.empty_like(category_name_input_embeds)
+        #nn.init.normal_(name_perturbation, std=0.02)
+        name_perturbation = torch.zeros_like(category_name_input_embeds)
+        self.name_perturbation = nn.Parameter(name_perturbation)
+        
+        # Mask for class embeddings which aren't special tokens
+        name_token_mask = category_name_attn_masks.clone().type(torch.bool)
+        name_token_mask[:, :self.vlm.text_start_special_token_count()] = False
+        name_token_mask[:, -self.vlm.text_end_special_token_count():] = False
+        self.register_buffer("name_token_mask", name_token_mask)
+        
+        '''
+        TIP-Adapter Setup
+        '''
+        # "Cache keys", computes affinity between query video embedding and support video embeddings
+        # TIP-Adapter requires normalized vid/text output embeddings
+        self.cache_keys = nn.Parameter(F.normalize(flat_support_vid_embeds, dim=-1))
+        
+        # "Cache values", records the true class for each support video
+        self.register_buffer(
+            "cache_values",
+            F.one_hot(flat_support_vid_labels, num_classes=len(category_names)).float()
+        )
+        
+        
+        
+        
+    def forward(self, vid_embeds: torch.Tensor) -> torch.Tensor:
+        # Retain only name perturbations which correspond to actual words (not special tokens or padding)
+        masked_name_perturbation = self.name_perturbation * self.name_token_mask.unsqueeze(2)
+        perturbed_category_name_input_embeds = self.category_name_input_embeds + masked_name_perturbation
+        
         text_input_embeds = torch.cat(
             [
-                self.category_name_input_embeds[:, :self.vlm.text_start_special_token_count(), :],
+                perturbed_category_name_input_embeds[:, :self.vlm.text_start_special_token_count(), :],
                 self.context.expand(self.category_name_input_embeds.size(0), -1, -1),
-                self.category_name_input_embeds[:, self.vlm.text_start_special_token_count():, :]
+                perturbed_category_name_input_embeds[:, self.vlm.text_start_special_token_count():, :]
             ], dim=1
         )
         text_input_attn_masks = torch.cat(
@@ -256,22 +326,19 @@ class SharedContextCoopModule(nn.Module):
                 self.category_name_attn_masks[:, self.vlm.text_start_special_token_count():]
             ], dim=1
         )
+        
         text_embeds = self.vlm.text_encoder_from_word_embeddings(text_input_embeds, text_input_attn_masks)
-        return text_embeds
         
-    def forward(self, vid_embeds: torch.Tensor) -> torch.Tensor:
-        text_embeds = self.tuned_text_embeds()
+        # TIP-Adapter requires normalized output embeddings
+        vid_embeds = F.normalize(vid_embeds, dim=1)
+        text_embeds = F.normalize(text_embeds, dim=1)
+        logits = self.vlm.logit_scale() * (vid_embeds @ text_embeds.T)
         
-        if self.vlm.default_similarity_metric() == Similarity.COSINE:
-            vid_embeds = F.normalize(vid_embeds, dim=1)
-            text_embeds = F.normalize(text_embeds, dim=1)
-            logits = self.vlm.logit_scale() * (vid_embeds @ text_embeds.T)
-            
-        elif self.vlm.default_similarity_metric() == Similarity.DOT:
-            logits = self.vlm.logit_scale() * (vid_embeds @ text_embeds.T)
-            
-        else:
-            raise NotImplementedError
+        # TIP-Adapter cache logit addition
+        cache_affinity = vid_embeds @ self.cache_keys.T
+        cache_logit_addition = (-1 * self.beta * (1 - cache_affinity)).exp() @ self.cache_values
+        
+        logits += self.alpha * cache_logit_addition
         
         return logits
         

@@ -1,10 +1,10 @@
 import numpy as np
-import decord
 import random
 import os
 from typing import Optional, List
 
 import torch
+import decord
 from transformers import CLIPModel, CLIPTokenizer, CLIPProcessor
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

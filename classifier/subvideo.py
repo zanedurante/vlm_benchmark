@@ -2,6 +2,8 @@ from functools import lru_cache
 from typing import Optional, Tuple
 import numpy as np
 import math
+
+import torch
 import decord
 
 from SimilarityVLM import SimilarityVLM

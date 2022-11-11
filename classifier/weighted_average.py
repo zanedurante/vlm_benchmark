@@ -17,10 +17,13 @@ class WeightedTextFewShotClassifier(FewShotClassifier):
         metric (Similarity | None):     The similarity metric to use, if None uses vlm default
         text_weight (float):            Relative weight of text embeddings compared to video embeddings when computing class prototypes
     '''
-    def __init__(self, vlm: SimilarityVLM, metric: Optional[Similarity] = None, text_weight: float = 1.0) -> None:
+    def __init__(self, vlm: SimilarityVLM, metric: Optional[Similarity] = None, text_weight: float = 1.0, prompt_ensembling: Optional[str] = None) -> None:
         super().__init__(vlm=vlm, metric=metric)
         
         self.text_weight = float(text_weight)
+        self.prompt_ensembling = prompt_ensembling
+        
+        assert prompt_ensembling in [None, "tip_adapter", "vid_action"], "Unrecognized prompt ensembling setup"
         
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
@@ -30,7 +33,8 @@ class WeightedTextFewShotClassifier(FewShotClassifier):
     def params(self) -> dict:
         return {
             "metric": self.metric.name,
-            "text_weight": self.text_weight
+            "text_weight": self.text_weight,
+            "prompt_ensembling": self.prompt_ensembling
         }
         
     '''
@@ -65,7 +69,42 @@ class WeightedTextFewShotClassifier(FewShotClassifier):
         support_embeds = [] # Each element should have shape (n_way, n_supporting_embeds, embed_dim)
         support_embed_weights = []
         
-        text_embeds = np.vstack([self.vlm.get_text_embeds(name) for name in category_names])
+        if self.prompt_ensembling is None:
+            text_embeds = np.vstack([self.vlm.get_text_embeds(name) for name in category_names])
+        elif self.prompt_ensembling == "tip_adapter":
+            prompt_templates = [
+                "itap of a {}",
+                "a bad photo of the {}",
+                "a origami {}",
+                "a photo of the large {}",
+                "a {} in a video game",
+                "art of the {}",
+                "a photo of the small {}"
+            ]
+            text_embeds = np.array([
+                [
+                    self.vlm.get_text_embeds(template.format(name))
+                    for template in prompt_templates
+                ]
+                for name in category_names
+            ]).mean(axis=1)
+        elif self.prompt_ensembling == "vid_action":
+            prompt_templates = [
+                "i am {}",
+                "the video shows me {}",
+                "a photo showing a {}",
+                "a photo showing the activity of {}"
+            ]
+            text_embeds = np.array([
+                [
+                    self.vlm.get_text_embeds(template.format(name))
+                    for template in prompt_templates
+                ]
+                for name in category_names
+            ]).mean(axis=1)
+        else:
+            raise NotImplementedError
+
         support_embeds.append(text_embeds[:, None, :])
         support_embed_weights += [self.text_weight]
         
