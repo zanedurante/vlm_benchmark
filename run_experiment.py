@@ -27,6 +27,8 @@ argparser.add_argument("--dataset_split", default="val", choices=["val", "test"]
                        help="Which dataset split to evaluate on.")
 argparser.add_argument("-s", "--n_shots", nargs="+", type=int, default=[1,2,4,8,16],
                        help="Number of shots to run on.")
+argparser.add_argument("--n_episodes", type=int, default=4,
+                       help="Number of support set samples to repeat every test over.")
 argparser.add_argument("--val_tuning", type=bool, default=True,
                        help="Whether or not the final trained classifier is reloaded from the epoch with the best val performance")
 argparser.add_argument("-f", "--file", default=None,
@@ -65,7 +67,7 @@ params_dict["dataset.split_type"] = ["video"]
 params_dict["test.n_way"] = [None] # None value gets manually converted to the max size for each dataset
 params_dict["test.n_support"] = args.n_shots
 params_dict["test.n_query"] = [None]
-params_dict["test.n_episodes"] = [4]
+params_dict["test.n_episodes"] = [args.n_episodes]
 
 
 
