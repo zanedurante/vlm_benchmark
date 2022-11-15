@@ -26,7 +26,7 @@ argparser.add_argument("-s", "--n_shots", nargs="+", type=int, default=[1,2,4,8,
                        help="Number of shots to run on")
 argparser.add_argument("--n_episodes", type=int, default=4,
                        help="Number of support set samples to repeat every test over")
-argparser.add_argument("--val_tuning", type=bool, default=True,
+argparser.add_argument("--val_tuning", type=lambda x: (x == "True"), default=True,
                        help="Whether or not the final trained classifier is reloaded from the epoch with the best val performance")
 argparser.add_argument("-m", "--method", default="grid", choices=["gp", "forest", "random", "grid"],
                        help="Hyperparameter search method name.")
