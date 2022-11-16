@@ -1,0 +1,36 @@
+# General setup (works for all VLMs)
+# Working as of 2022-11-16
+# TODO: Add instructions for adding repositories
+
+# CLIP installs
+conda create --name vlm_env python=3.9 -y
+conda activate vlm_env
+
+# For V100 GPUs:
+conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.3 -c pytorch -y
+
+# For A100 GPUs:
+pip install torch==1.9.0+cu111 torchvision==0.10.0+cu111 torchaudio==0.9.0 -f https://download.pytorch.org/whl/torch_stable.html
+
+conda install -c huggingface transformers==4.14.1 tokenizers==0.10.3
+
+conda install -c huggingface transformers==4.14.1 tokenizers==0.10.3
+conda install pandas -y
+pip install decord ftfy tqdm regex filelock
+conda install ipykernel ipywidgets -y
+
+
+# MILES installs
+pip install psutil humanize scipy einops dominate sacred neptune-contrib opencv-python ftfy timm==0.4.5
+
+# VideoCLIP installs
+cd video_clip/fairseq
+pip install -e .
+export MKL_THREADING_LAYER=GNU
+cd ../MMPT_updated
+pip install -e .
+pip install pytorchvideo
+
+pip install scikit-optimize
+
+# Install MOMA
