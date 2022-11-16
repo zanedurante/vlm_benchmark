@@ -3,11 +3,11 @@ import sys
 from types import SimpleNamespace
 import pandas as pd
 import numpy as np
-import decord
 from typing import Optional
 from torchvision.transforms import Compose, CenterCrop, Resize, Lambda
 
 import torch
+import decord
 import torch.nn.functional as F
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

@@ -43,6 +43,10 @@ class CoNaTipAdapterFewShotClassifier(FewShotClassifier):
         
         assert optimizer in ["sgd", "adam", "adamw"], "Invalid optimizer choice."
         
+        # Save the latest progression of tuned class embeddings over epochs for visualization
+        # {class name -> [orig text embed, tuned text embed epoch 0, epoch 1, ...]}
+        self.text_embed_training_record = {}
+        
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
     accuracy (apart from the underlying VLM object used).
@@ -103,7 +107,12 @@ class CoNaTipAdapterFewShotClassifier(FewShotClassifier):
             query_predictions = np.argmax(query_to_text_similarities, axis=1)
             return query_predictions
         
-        
+        # Save original text embeds for visualization
+        # Tuned text embeds will be added to this list
+        self.text_embed_training_record = {
+            name: [self.vlm.get_text_embeds(name)]
+            for name in category_names
+        }
         
         train_dataloader = torch.utils.data.DataLoader(
             list(zip(support_video_paths.flatten(), torch.repeat_interleave(torch.arange(n_way), n_support))),
@@ -128,7 +137,6 @@ class CoNaTipAdapterFewShotClassifier(FewShotClassifier):
         support_vid_labels = torch.arange(n_way).repeat_interleave(n_support)
         module = CoNaTipAdapterModule(self.vlm, category_names, support_vid_embeds, support_vid_labels, self.context_len, self.alpha, self.beta)
         module.to(DEVICE)
-        
         
         optim_input = [
             {"params": module.name_perturbation, "weight_decay": self.name_regularization},
@@ -228,7 +236,11 @@ class CoNaTipAdapterFewShotClassifier(FewShotClassifier):
                 #print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Name Reg Loss = {total_name_reg_loss / total_count:5.3E}, Adapter Reg Loss = {total_adapter_reg_loss / total_count:5.3E}")
                 print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Name Mag: {module.name_perturbation.pow(2).sum(dim=-1).sqrt().mean():5.3E}, Adapter Mag = {module.cache_keys.pow(2).sum(dim=-1).sqrt().mean():5.3E}")
             
-                
+            # Save tuned text output embeds into record
+            with torch.no_grad():
+                text_embeds = module.tuned_text_embeds().cpu().numpy()
+                for i, name in enumerate(category_names):
+                    self.text_embed_training_record[name].append(text_embeds[i])
                 
                 
         # Reload best val-tuning model state
@@ -306,8 +318,7 @@ class CoNaTipAdapterModule(nn.Module):
         
         
         
-        
-    def forward(self, vid_embeds: torch.Tensor) -> torch.Tensor:
+    def tuned_text_embeds(self):
         # Retain only name perturbations which correspond to actual words (not special tokens or padding)
         masked_name_perturbation = self.name_perturbation * self.name_token_mask.unsqueeze(2)
         perturbed_category_name_input_embeds = self.category_name_input_embeds + masked_name_perturbation
@@ -328,6 +339,10 @@ class CoNaTipAdapterModule(nn.Module):
         )
         
         text_embeds = self.vlm.text_encoder_from_word_embeddings(text_input_embeds, text_input_attn_masks)
+        return text_embeds
+        
+    def forward(self, vid_embeds: torch.Tensor) -> torch.Tensor:
+        text_embeds = self.tuned_text_embeds()
         
         # TIP-Adapter requires normalized output embeddings
         vid_embeds = F.normalize(vid_embeds, dim=1)

@@ -1,10 +1,10 @@
 import os, sys
 from typing import Optional, List
 import numpy as np
-import decord
 from transformers import AutoTokenizer
 
 import torch
+import decord
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 from SimilarityVLM import SimilarityVLM

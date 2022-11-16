@@ -1,9 +1,9 @@
 import importlib
 import numpy as np
 import os, sys
-import decord
 
 import torch
+import decord
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 from SimilarityVLM import *

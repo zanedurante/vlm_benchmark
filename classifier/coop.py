@@ -17,12 +17,15 @@ QUERY_BATCH_SIZE = 2048 # Batch size used for iterating through non-training dat
 Implementation of CoOp (https://arxiv.org/abs/2109.01134) for our framework.
 '''
 class CoopFewShotClassifier(FewShotClassifier):
-    def __init__(self, vlm: SimilarityVLM, context_len: int = 16, lr: float = 1e-3, epochs: int = 10,
-                 warmup_lr: float = 1e-5, warmup_epochs: int = 1, batch_size: int = 1, optimizer: str = "sgd",
+    def __init__(self, vlm: SimilarityVLM, context_len: int = 16, csc: bool = False,
+                 lr: float = 1e-3, epochs: int = 10,
+                 warmup_lr: float = 1e-5, warmup_epochs: int = 1,
+                 batch_size: int = 1, optimizer: str = "sgd",
                  random_augment: bool = True):
         self.vlm = vlm
         
         self.context_len = int(context_len)
+        self.csc = bool(csc)
         self.lr = float(lr)
         self.epochs = int(epochs)
         self.warmup_lr = float(warmup_lr)
@@ -45,6 +48,7 @@ class CoopFewShotClassifier(FewShotClassifier):
     def params(self) -> dict:
         return {
             "context_len": self.context_len,
+            "csc": self.csc,
             "lr": self.lr,
             "epochs": self.epochs,
             "warmup_lr": self.warmup_lr,
@@ -113,7 +117,7 @@ class CoopFewShotClassifier(FewShotClassifier):
                 batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False
             )
         
-        coop_module = SharedContextCoopModule(self.vlm, category_names, self.context_len)
+        coop_module = CoopModule(self.vlm, category_names, context_len=self.context_len, class_specific_context=self.csc)
         coop_module.to(DEVICE)
         
         if self.optimizer == "sgd":
@@ -224,8 +228,8 @@ class CoopFewShotClassifier(FewShotClassifier):
                 
         
         
-class SharedContextCoopModule(nn.Module):
-    def __init__(self, vlm: SimilarityVLM, category_names: np.ndarray, context_len: int = 16):
+class CoopModule(nn.Module):
+    def __init__(self, vlm: SimilarityVLM, category_names: np.ndarray, context_len: int = 16, class_specific_context: bool = False):
         super().__init__()
         
         self.vlm = vlm
@@ -236,16 +240,25 @@ class SharedContextCoopModule(nn.Module):
         
         # Hyperparameters
         self.context_len = context_len
+        self.csc = class_specific_context
         
-        context = torch.empty(1, self.context_len, vlm.input_word_embed_dim())
+        if class_specific_context:
+            context = torch.empty(len(category_names), self.context_len, vlm.input_word_embed_dim())
+        else:
+            context = torch.empty(1, self.context_len, vlm.input_word_embed_dim())
         nn.init.normal_(context, std=0.02)
         self.context = nn.Parameter(context)
         
     def tuned_text_embeds(self):
+        if self.csc:
+            context_per_class = self.context
+        else:
+            context_per_class = self.context.expand(self.category_name_input_embeds.size(0), -1, -1)
+        
         text_input_embeds = torch.cat(
             [
                 self.category_name_input_embeds[:, :self.vlm.text_start_special_token_count(), :],
-                self.context.expand(self.category_name_input_embeds.size(0), -1, -1),
+                context_per_class,
                 self.category_name_input_embeds[:, self.vlm.text_start_special_token_count():, :]
             ], dim=1
         )
