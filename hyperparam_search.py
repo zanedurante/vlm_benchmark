@@ -24,17 +24,38 @@ argparser.add_argument("-d", "--dataset", nargs="+", default=["smsm", "moma_sact
                        help="Which dataset name to run on")
 argparser.add_argument("-s", "--n_shots", nargs="+", type=int, default=[1,2,4,8,16],
                        help="Number of shots to run on")
+argparser.add_argument("-w", "--n_way", nargs="+", type=int, default=[None],
+                       help="Number of categories to classify between. Default value None indicates choosing the max categories for each dataset.")
 argparser.add_argument("--n_episodes", type=int, default=4,
                        help="Number of support set samples to repeat every test over")
 argparser.add_argument("--val_tuning", type=lambda x: (x == "True"), default=True,
                        help="Whether or not the final trained classifier is reloaded from the epoch with the best val performance")
+argparser.add_argument("--class-split", action="store_true",
+                       help="Flag to use class-wise splitting (meta-learning paradigm) instead of video-wise splitting (finetuning paradigm)")
 argparser.add_argument("-m", "--method", default="grid", choices=["gp", "forest", "random", "grid"],
                        help="Hyperparameter search method name.")
 argparser.add_argument("-n", "--n_search_runs", type=int, default=32,
                        help="Sets the max number of hyperparameter search runs per test parameter value (dataset+n_shot)")
 argparser.add_argument("-f", "--folder", default=None,
                        help="Optional folder path in which to save val and test results. By default creates folder for VLM and Classifier choice")
-args = argparser.parse_args()
+args, unknown_args_list = argparser.parse_known_args()
+
+# Attempt to parse unknown args as vlm/classifier parameter overrides, like "--classifier.epochs 5 10 20"
+cur_key = None
+cur_key_vals = []
+unknown_args = {}
+for unknown_arg in unknown_args_list:
+    if unknown_arg.startswith("--"):
+        if cur_key is not None:
+            unknown_args[cur_key] = cur_key_vals
+        cur_key = unknown_arg[2:]
+        cur_key_vals = []
+    else:
+        if unknown_arg in ["True", "False"]:
+            unknown_arg = (unknown_arg == "True")
+        cur_key_vals.append(unknown_arg)
+if cur_key is not None:
+    unknown_args[cur_key] = cur_key_vals
 
 
 
@@ -48,13 +69,11 @@ test_params_dict = {}
 # Dataset Params - dataset.____ keys are passed into DatasetHandler constructor
 test_params_dict["dataset.name"] = args.dataset
 
-test_params_dict["dataset.split_type"] = ["video"]
-
 # Few-Shot Test Params - test.____ keys are passed into few-shot test call
-test_params_dict["test.n_way"] = [None] # None value gets manually converted to the max size for each dataset
+test_params_dict["test.n_way"] = args.n_way # None value gets manually converted to the max size for each dataset
 test_params_dict["test.n_support"] = args.n_shots
 test_params_dict["test.n_query"] = [None]
-test_params_dict["test.n_episodes"] = [args.n_episodes] # Bring to 50 
+test_params_dict["test.n_episodes"] = [args.n_episodes]
 
 
 
@@ -160,20 +179,18 @@ elif args.classifier == "smsm_object_oracle":
 elif args.classifier == "coop":
     from classifier.coop import CoopFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
-    fixed_classifier_kwargs["batch_size"] = 32
+    fixed_classifier_kwargs["batch_size"] = 8
     fixed_classifier_kwargs["optimizer"] = "sgd"
     fixed_classifier_kwargs["epochs"] = 50
-    fixed_classifier_kwargs["context_len"] = 2
+    fixed_classifier_kwargs["csc"] = False
     
-    ORIG_COOP_BATCH_SIZE = 32
-    ORIG_COOP_LR = 2e-3
-    equiv_lr = ORIG_COOP_LR / ORIG_COOP_BATCH_SIZE * fixed_classifier_kwargs["batch_size"]
-    
-    fixed_classifier_kwargs["warmup_lr"] = min(1e-5, 0.1 * 0.1 * equiv_lr)
-    
-    classifier_hyperparams.append(skopt.space.Real(
-        0.1 * equiv_lr, 10 * equiv_lr,
-        name="lr", prior="log-uniform"
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [8, 16],
+        name="context_len"
+    ))
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [6.25e-5, 5e-4, 2e-3, 4e-3],
+        name="lr"
     ))
     
 elif args.classifier == "cona":
@@ -227,7 +244,44 @@ elif args.classifier == "cona_tip":
 else:
     raise ValueError("Unrecognized classifier arg")
 
-
+# Update classifier/vlm args with any that have been manually specified
+# If only a single value follows, fixed_<classifier/vlm>_args is updated,
+# if multiple values follow, <classifier/vlm>_hyperparams are updated or added to
+for key, val_list in unknown_args.items():
+    if key.startswith("vlm.") and len(val_list) > 0:
+        key = key[4:]
+        
+        if len(val_list) == 1:
+            # Update fixed args
+            fixed_vlm_kwargs[key] = val_list[0]
+        
+        else:
+            # Update hyperparams    
+            new_hyperparam = skopt.space.Categorical(val_list, name=key)
+            
+            matched_name_hyperparam_inds = [i for i, hyper in enumerate(vlm_hyperparams) if hyper.name == key]
+            if len(matched_name_hyperparam_inds):
+                vlm_hyperparams[matched_name_hyperparam_inds[0]] = new_hyperparam
+            else:
+                vlm_hyperparams.append(new_hyperparam)
+    elif key.startswith("classifier.") and len(val_list) > 0:
+        key = key[11:]
+        
+        if len(val_list) == 1:
+            # Update fixed args
+            fixed_classifier_kwargs[key] = val_list[0]
+            
+        else:
+            # Update hyperparams
+            new_hyperparam = skopt.space.Categorical(val_list, name=key)
+            
+            matched_name_hyperparam_inds = [i for i, hyper in enumerate(classifier_hyperparams) if hyper.name == key]
+            if len(matched_name_hyperparam_inds):
+                classifier_hyperparams[matched_name_hyperparam_inds[0]] = new_hyperparam
+            else:
+                classifier_hyperparams.append(new_hyperparam)
+    else:
+        raise ValueError(f"Unrecognized argument: --{' '.join([key] + val_list)}")
 
 '''
 Set up results folder
@@ -253,9 +307,11 @@ for classifier_hyper in classifier_hyperparams:
     classifier_hyper.name = f"classifier.{classifier_hyper.name}"
 hyperparam_space = vlm_hyperparams + classifier_hyperparams
 
-train_dataset = None
-val_dataset = None
-test_dataset = None
+support_dataset_val = None  # Source for example videos during val phase
+query_dataset_val = None    # Source for query videos during val phase
+support_dataset_test = None # Source for example videos during test phase
+query_dataset_test = None   # Source for query videos during test phase
+val_tuning_dataset = None   # Optional set of val query videos for selecting best epoch (in val and test phase)
 cur_dataset_kwargs = None
 
 vlm = None
@@ -269,20 +325,30 @@ for test_params in pbar:
     dataset_kwargs = {key[8:]: val for key, val in test_params.items() if key.startswith("dataset.")}
     test_kwargs = {key[5:]: val for key, val in test_params.items() if key.startswith("test.")}
 
-    # Update dataset
-    if val_dataset is None or cur_dataset_kwargs != dataset_kwargs:
-        train_dataset = DatasetHandler(**dataset_kwargs, split="train")
-        val_dataset = DatasetHandler(**dataset_kwargs, split="val")
-        test_dataset = DatasetHandler(**dataset_kwargs, split="test")
+    # Update datasets
+    if cur_dataset_kwargs != dataset_kwargs:
+        # Primary case: fine-tuning paradigm, videowise splits, support set = train split, query set = val or test split
+        if not args.class_split:
+            query_dataset_val = DatasetHandler(**dataset_kwargs, split="val", split_type="video")
+            query_dataset_test = DatasetHandler(**dataset_kwargs, split="test", split_type="video")
+            support_dataset_val = support_dataset_test = DatasetHandler(**dataset_kwargs, split="train", split_type="video")
+            val_tuning_dataset = query_dataset_val if args.val_tuning else None
+            
+        # Alternate case: meta-learning paradigm, classwise splits, support set + query set drawn from same split
+        # val-tuning is disabled with this setting
+        else:
+            query_dataset_val = support_dataset_val = DatasetHandler(**dataset_kwargs, split="val", split_type="class")
+            query_dataset_test = support_dataset_test = DatasetHandler(**dataset_kwargs, split="test", split_type="class")
+            val_tuning_dataset = None
         
         cur_dataset_kwargs = dataset_kwargs
         
     # Convert n_way = None into n_way = max-ways
     if test_kwargs["n_way"] is None:
-        test_kwargs["n_way"] = train_dataset.category_count()
+        test_kwargs["n_way"] = min(query_dataset_val.category_count(), query_dataset_test.category_count())
         
     '''
-    Define functions for skopt optimizer methods, or for running tests with any sampled hyperparam values
+    Define functions for skopt optimizer methods, or for generally running tests with any sampled hyperparam values
     '''
     # skopt loss function
     @skopt.utils.use_named_args(hyperparam_space)
@@ -294,13 +360,13 @@ for test_params in pbar:
         # Update vlm if necessary (allow reuse if unchanging)
         global vlm, cur_vlm_kwargs
         if vlm is None or cur_vlm_kwargs != vlm_kwargs:
-            vlm = VLM(**fixed_vlm_kwargs, **vlm_kwargs)
+            vlm = VLM(**dict(fixed_vlm_kwargs, **vlm_kwargs))
             cur_vlm_kwargs = vlm_kwargs
             
         # Update classifier
-        classifier = Classifier(vlm, **fixed_classifier_kwargs, **classifier_kwargs)
+        classifier = Classifier(vlm, **dict(fixed_classifier_kwargs, **classifier_kwargs))
         
-        accuracy = val_run_handler.run_few_shot_test(classifier, val_dataset, train_dataset, **test_kwargs, val_tuning_dataset=val_dataset if args.val_tuning else None)
+        accuracy = val_run_handler.run_few_shot_test(classifier, query_dataset_val, support_dataset_val, **test_kwargs, val_tuning_dataset=val_tuning_dataset)
         return -1 * accuracy
     
     # Callback function for progress bar
@@ -328,9 +394,9 @@ for test_params in pbar:
         test_run_handler.results,
         dict(
             test_kwargs,
-            query_dataset=test_dataset.id(),
-            support_dataset=train_dataset.id(),
-            val_tuning_dataset=val_dataset.id() if args.val_tuning else None,
+            query_dataset=query_dataset_test.id(),
+            support_dataset=support_dataset_test.id(),
+            val_tuning_dataset=val_tuning_dataset.id() if val_tuning_dataset is not None else None,
             vlm_class=VLM.__name__,
             **{f"vlm.{key}": val for key, val in fixed_vlm_kwargs.items()},
             classifier_class=Classifier.__name__,
@@ -360,9 +426,9 @@ for test_params in pbar:
             val_run_handler.results,
             dict(
                 test_kwargs,
-                query_dataset=val_dataset.id(),
-                support_dataset=train_dataset.id(),
-                val_tuning_dataset=val_dataset.id() if args.val_tuning else None,
+                query_dataset=query_dataset_val.id(),
+                support_dataset=support_dataset_val.id(),
+                val_tuning_dataset=val_tuning_dataset.id() if val_tuning_dataset is not None else None,
                 vlm_class=VLM.__name__,
                 **{f"vlm.{key}": val for key, val in fixed_vlm_kwargs.items()},
                 classifier_class=Classifier.__name__,
@@ -460,9 +526,9 @@ for test_params in pbar:
             val_run_handler.results,
             dict(
                 test_kwargs,
-                query_dataset=val_dataset.id(),
-                support_dataset=train_dataset.id(),
-                val_tuning_dataset=val_dataset.id() if args.val_tuning else None,
+                query_dataset=query_dataset_val.id(),
+                support_dataset=support_dataset_val.id(),
+                val_tuning_dataset=val_tuning_dataset.id() if val_tuning_dataset is not None else None,
                 vlm_class=VLM.__name__,
                 **{f"vlm.{key}": val for key, val in fixed_vlm_kwargs.items()},
                 classifier_class=Classifier.__name__,
@@ -493,7 +559,7 @@ for test_params in pbar:
         else:
             fig = ax.get_figure()
         fig.savefig(
-            os.path.join(RESULTS_FOLDER, ".".join([val_dataset.id()] + [f"{key}_{val}" for key, val in test_kwargs.items()] + ["jpg"])),
+            os.path.join(RESULTS_FOLDER, ".".join([query_dataset_val.id()] + [f"{key}_{val}" for key, val in test_kwargs.items()] + ["jpg"])),
             facecolor="white", bbox_inches="tight"
         )
     
@@ -510,9 +576,9 @@ for test_params in pbar:
         best_hyperparam_values,
         dict(
             test_kwargs,
-            query_dataset=val_dataset.id(),
-            support_dataset=train_dataset.id(),
-            val_tuning_dataset=val_dataset.id() if args.val_tuning else None,
+            query_dataset=query_dataset_val.id(),
+            support_dataset=support_dataset_val.id(),
+            val_tuning_dataset=val_tuning_dataset.id() if val_tuning_dataset is not None else None,
             vlm_class=VLM.__name__,
             **{f"vlm.{key}": val for key, val in fixed_vlm_kwargs.items()},
             classifier_class=Classifier.__name__,
@@ -547,10 +613,10 @@ for test_params in pbar:
                 # Replace np types with native python types
                 if type(val).__module__ == np.__name__:
                     val = val.item()
-                if col != "classifier.metric":
-                    classifier_kwargs[col[11:]] = val
-                else:
+                if col == "classifier.metric":
                     classifier_kwargs[col[11:]] = Similarity[val]
+                else:
+                    classifier_kwargs[col[11:]] = val
                 
     # Update vlm if necessary (allow reuse if unchanging)
     if vlm is None or cur_vlm_kwargs != vlm_kwargs:
@@ -560,10 +626,10 @@ for test_params in pbar:
     # Update classifier
     classifier = Classifier(vlm, **fixed_classifier_kwargs, **classifier_kwargs)
     
-    test_acc = test_run_handler.run_few_shot_test(classifier, test_dataset, train_dataset, **test_kwargs, val_tuning_dataset=val_dataset if args.val_tuning else None)
+    test_acc = test_run_handler.run_few_shot_test(classifier, query_dataset_test, support_dataset_test, **test_kwargs, val_tuning_dataset=val_tuning_dataset)
     print(f"Test Run Complete!")
     print(f"Accuracy: {test_acc}")
-    print(f"Dataset: {test_dataset.id()}")
+    print(f"Dataset: {query_dataset_test.id()}")
     print(f"Test: {json.dumps(test_kwargs, indent=2)}")
     print(f"VLM: {json.dumps(vlm.params(), indent=2)}")
     print(f"Classifier: {json.dumps(classifier.params(), indent=2)}")

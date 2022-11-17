@@ -154,7 +154,7 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
         if self.finetune_epochs > 0:
             # Copy support vid embeddings as a training dataset for finetuning
             train_dataset = torch.utils.data.TensorDataset(flat_support_vid_embeds, flat_support_vid_labels)
-            train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, num_workers=8, shuffle=True)
+            train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, num_workers=0, shuffle=True)
             
             # Setup embeds for Val-Tuning Dataset
             if val_tuning_video_paths is None or val_tuning_video_labels is None:
