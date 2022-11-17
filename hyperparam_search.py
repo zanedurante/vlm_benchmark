@@ -18,7 +18,7 @@ argparser = argparse.ArgumentParser()
 argparser.add_argument("vlm", choices=["clip", "miles", "videoclip"],
                        help="VLM to run. Requires corresponding conda environment")
 argparser.add_argument("classifier", choices=["vl_proto", "hard_prompt_vl_proto", "nearest_neighbor", "gaussian_proto",
-                                              "subvideo", "tip_adapter", "coop", "cona", "cona_tip"],
+                                              "linear", "subvideo", "tip_adapter", "coop", "cona", "cona_tip"],
                        help="Classifier to run")
 argparser.add_argument("-d", "--dataset", nargs="+", default=["smsm", "moma_sact", "kinetics_100", "moma_act"],
                        help="Which dataset name to run on")
@@ -154,6 +154,12 @@ elif args.classifier == "gaussian_proto":
         1e-2, 1e2,
         name="prior_var", prior="log-uniform"
     ))
+elif args.classifier == "linear":
+    from classifier import LinearProbe as Classifier
+    classifier_hyperparams.append(skopt.space.Real(
+        1e-2, 1e2,
+        name="regularization", prior="log-uniform"
+    ))
 elif args.classifier == "subvideo":
     from classifier import SubVideoAverageFewShotClassifier as Classifier
 elif args.classifier == "tip_adapter":
@@ -174,10 +180,8 @@ elif args.classifier == "tip_adapter":
         ["tip_adapter", "vid_action"],
         name="prompt_ensembling"
     ))
-elif args.classifier == "smsm_object_oracle":
-    from classifier.smsm_object_oracle import SmsmObjectOracleFewShotClassifier as Classifier
 elif args.classifier == "coop":
-    from classifier.coop import CoopFewShotClassifier as Classifier
+    from classifier import CoopFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
     fixed_classifier_kwargs["batch_size"] = 8
     fixed_classifier_kwargs["optimizer"] = "sgd"
@@ -194,7 +198,7 @@ elif args.classifier == "coop":
     ))
     
 elif args.classifier == "cona":
-    from classifier.cona import CoNaFewShotClassifier as Classifier
+    from classifier import CoNaFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
     fixed_classifier_kwargs["batch_size"] = 32
     fixed_classifier_kwargs["optimizer"] = "adamw"
@@ -217,7 +221,7 @@ elif args.classifier == "cona":
     ))
     
 elif args.classifier == "cona_tip":
-    from classifier.cona_tip_adapter import CoNaTipAdapterFewShotClassifier as Classifier
+    from classifier import CoNaTipAdapterFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
     fixed_classifier_kwargs["batch_size"] = 8
     fixed_classifier_kwargs["optimizer"] = "adamw"

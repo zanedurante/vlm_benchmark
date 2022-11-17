@@ -3,5 +3,10 @@ from .weighted_average import WeightedTextFewShotClassifier
 from .hard_prompt import HardPromptFewShotClassifier
 from .nearest_neighbors import NearestNeighborFewShotClassifier
 from .gaussian import GaussianFewShotClassifier
+from .linear_probe import LinearProbe
 from .subvideo import SubVideoAverageFewShotClassifier
+from .smsm_object_oracle import SmsmObjectOracleFewShotClassifier
 from .tip_adapter import TipAdapterFewShotClassifier
+from .coop import CoopFewShotClassifier
+from .cona import CoNaFewShotClassifier
+from .cona_tip_adapter import CoNaTipAdapterFewShotClassifier
