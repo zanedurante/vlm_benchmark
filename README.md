@@ -1,6 +1,15 @@
 # vlm_benchmark
 Code for benchmarking contrastive VLMs on zero and few-shot activity recognition. 
 
+## Current citation for the project
+```
+@InProceedings{durante2023cona,
+  title={CoNa: Context-Name Tuning for Few-shot Activity Recognition},
+  author={Durante, Zane and Harries, Robathan and Luo, Zelun and Sun, Adam and Agarwal, Pratyush and Adeli, Ehsan and Fei-Fei, Li},
+  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  year={\noop{2023} in submission}
+}
+```
 
 ## Project Roadmap (before CVPR deadline):
 - [x] Create unified framework for contrastive VLMs
