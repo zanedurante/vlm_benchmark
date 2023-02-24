@@ -16,7 +16,7 @@ QUERY_BATCH_SIZE = 2048 # Batch size used for iterating through non-training dat
 '''
 Implementation of our algorithm: Context Name Optimization + TIP Adapter.
 '''
-class CoNaTipAdapterFewShotClassifier(FewShotClassifier):
+class CoNaAdapterFewShotClassifier(FewShotClassifier):
     def __init__(self, vlm: SimilarityVLM, context_len: int = 16, 
                  name_regularization: float = 1e-2,
                  lr: float = 1e-3, epochs: int = 10,
@@ -126,7 +126,7 @@ class CoNaTipAdapterFewShotClassifier(FewShotClassifier):
             for vid_path in support_video_paths.flatten()
         ]))
         support_vid_labels = torch.arange(n_way).repeat_interleave(n_support)
-        module = CoNaTipAdapterModule(self.vlm, category_names, support_vid_embeds, support_vid_labels, self.context_len, self.alpha, self.beta)
+        module = CoNaAdapterModule(self.vlm, category_names, support_vid_embeds, support_vid_labels, self.context_len, self.alpha, self.beta)
         module.to(DEVICE)
         
         
@@ -251,7 +251,7 @@ class CoNaTipAdapterFewShotClassifier(FewShotClassifier):
                 
         
         
-class CoNaTipAdapterModule(nn.Module):
+class CoNaAdapterModule(nn.Module):
     def __init__(self, vlm: SimilarityVLM, category_names: np.ndarray,
                  flat_support_vid_embeds: torch.Tensor, flat_support_vid_labels: torch.Tensor,
                  context_len: int, alpha: float, beta: float):

@@ -131,8 +131,8 @@ elif args.classifier == "cona":
     fixed_classifier_kwargs["lr"] = 4e-4
     fixed_classifier_kwargs["name_regularization"] = 1
     fixed_classifier_kwargs["context_len"] = 16
-elif args.classifier == "cona_tip":
-    from classifier.cona_tip_adapter import CoNaTipAdapterFewShotClassifier as Classifier
+elif args.classifier == "cona_adapter":
+    from classifier.cona_adapter import CoNaAdapterFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
     fixed_classifier_kwargs["batch_size"] = 8
     fixed_classifier_kwargs["optimizer"] = "adamw"

@@ -221,7 +221,7 @@ elif args.classifier == "cona":
     ))
     
 elif args.classifier == "cona_tip":
-    from classifier import CoNaTipAdapterFewShotClassifier as Classifier
+    from classifier import CoNaAdapterFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
     fixed_classifier_kwargs["batch_size"] = 8
     fixed_classifier_kwargs["optimizer"] = "adamw"

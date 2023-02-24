@@ -9,4 +9,4 @@ from .smsm_object_oracle import SmsmObjectOracleFewShotClassifier
 from .tip_adapter import TipAdapterFewShotClassifier
 from .coop import CoopFewShotClassifier
 from .cona import CoNaFewShotClassifier
-from .cona_tip_adapter import CoNaTipAdapterFewShotClassifier
+from .cona_adapter import CoNaAdapterFewShotClassifier

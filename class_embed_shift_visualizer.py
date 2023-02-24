@@ -69,8 +69,8 @@ cona = CoNaFewShotClassifier(
     random_augment=False
 )
 
-from classifier.cona_tip_adapter import CoNaTipAdapterFewShotClassifier
-cona_adapter = CoNaTipAdapterFewShotClassifier(
+from classifier.cona_adapter import CoNaAdapterFewShotClassifier
+cona_adapter = CoNaAdapterFewShotClassifier(
     vlm,
     lr=1e-3,
     epochs=N_EPOCHS,
