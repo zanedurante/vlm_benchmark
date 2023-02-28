@@ -10,3 +10,4 @@ from .tip_adapter import TipAdapterFewShotClassifier
 from .coop import CoopFewShotClassifier
 from .cona import CoNaFewShotClassifier
 from .cona_adapter import CoNaAdapterFewShotClassifier
+from .name_tuning import NameTuningFewShotClassifier

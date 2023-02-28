@@ -18,7 +18,7 @@ argparser = argparse.ArgumentParser()
 argparser.add_argument("vlm", choices=["clip", "miles", "videoclip"],
                        help="VLM to run. Requires corresponding conda environment")
 argparser.add_argument("classifier", choices=["vl_proto", "hard_prompt_vl_proto", "nearest_neighbor", "gaussian_proto",
-                                              "linear", "subvideo", "tip_adapter", "coop", "cona", "cona_tip"],
+                                              "linear", "subvideo", "tip_adapter", "coop", "cona", "cona_adapter", "name_tuning"],
                        help="Classifier to run")
 argparser.add_argument("-d", "--dataset", nargs="+", default=["smsm", "moma_sact", "kinetics_100", "moma_act"],
                        help="Which dataset name to run on")
@@ -220,7 +220,7 @@ elif args.classifier == "cona":
         name="name_regularization", prior="log-uniform"
     ))
     
-elif args.classifier == "cona_tip":
+elif args.classifier == "cona_adapter":
     from classifier import CoNaAdapterFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
     fixed_classifier_kwargs["batch_size"] = 8
@@ -245,6 +245,27 @@ elif args.classifier == "cona_tip":
         [20],
         name="name_regularization"
     ))
+    
+elif args.classifier == "name_tuning":
+    from classifier import NameTuningFewShotClassifier as Classifier
+    fixed_classifier_kwargs["random_augment"] = False
+    fixed_classifier_kwargs["batch_size"] = 8
+    fixed_classifier_kwargs["optimizer"] = "adamw"
+    fixed_classifier_kwargs["epochs"] = 20
+    
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [1e-3, 3e-4],
+        name="lr"
+    ))
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [1e-2, 20],
+        name="name_regularization"
+    ))
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [None, "clip_kinetics", "clip_ucf"],
+        name="prompt_ensemble_id"
+    ))
+    
 else:
     raise ValueError("Unrecognized classifier arg")
 
