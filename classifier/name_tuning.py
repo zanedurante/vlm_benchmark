@@ -27,7 +27,8 @@ class NameTuningFewShotClassifier(FewShotClassifier):
                  warmup_epochs: int = 1,
                  batch_size: int = 1,
                  optimizer: str = "sgd",
-                 random_augment: bool = True
+                 random_augment: bool = True,
+                 low_memory_training: bool = False
                  ):
         self.vlm = vlm
         
@@ -40,6 +41,7 @@ class NameTuningFewShotClassifier(FewShotClassifier):
         self.batch_size = int(batch_size)
         self.optimizer = str(optimizer)
         self.random_augment = bool(random_augment)
+        self.low_memory_training = bool(low_memory_training)
         
         assert prompt_ensemble_id is None or prompt_ensemble_id in PROMPT_ENSEMBLES.keys(), "Unrecognized prompt_ensemble_id."
         assert optimizer in ["sgd", "adam", "adamw"], "Invalid optimizer choice."
@@ -69,7 +71,8 @@ class NameTuningFewShotClassifier(FewShotClassifier):
             "warmup_epochs": self.warmup_epochs,
             "batch_size": self.batch_size,
             "optimizer": self.optimizer,
-            "random_augment": self.random_augment
+            "random_augment": self.random_augment,
+            "low_memory_training": self.low_memory_training
         }
         
     '''
@@ -191,7 +194,37 @@ class NameTuningFewShotClassifier(FewShotClassifier):
                     ], dim=0)
                 vid_labels = vid_labels.to(DEVICE)
                 
-                logits = module(vid_embeds)
+                '''
+                # Compute gradients for each prompt template individually and clear
+                grad = None
+                for prompt_index in range(len(self.prompt_templates)):
+                    logits = module(vid_embeds, prompt_index=prompt_index)
+                    loss = F.cross_entropy(logits, vid_labels)
+                    
+                    total_loss += loss.item() * len(vid_paths) / len(self.prompt_templates)
+                    with torch.no_grad():
+                        total_reg_loss += 0.5 * self.name_regularization * module.name_perturbation.pow(2).sum() * len(vid_paths) / len(self.prompt_templates)
+                    total_correct += (logits.argmax(dim=1) == vid_labels).sum() / len(self.prompt_templates)
+                    total_count += len(vid_paths) / len(self.prompt_templates)
+                    
+                    optimizer.zero_grad()
+                    loss.backward()
+                    if grad is None:
+                        grad = module.name_perturbation.grad.clone()
+                    else:
+                        grad += module.name_perturbation.grad
+                grad /= len(self.prompt_templates)
+                optimizer.zero_grad()
+                module.name_perturbation.grad = grad
+                optimizer.step()
+                '''
+                   
+                if self.low_memory_training:
+                    prompt_indices = np.random.choice(len(self.prompt_templates), size=1)
+                else:
+                    prompt_indices = range(len(self.prompt_templates))
+                    
+                logits = module(vid_embeds, prompt_indices)
                 loss = F.cross_entropy(logits, vid_labels)
                 
                 total_loss += loss.item() * len(vid_paths)
@@ -281,7 +314,6 @@ class NameTuningModule(nn.Module):
         name_token_mask[:, :self.vlm.text_start_special_token_count()] = False
         self.register_buffer("name_token_mask", name_token_mask)
         
-        '''
         # Save fixed input word embeddings for each name and prompt template combination
         with torch.no_grad():
             prompt_name_input_embeds, prompt_name_attn_masks = vlm.get_input_word_embeddings([
@@ -295,7 +327,6 @@ class NameTuningModule(nn.Module):
         prompt_name_attn_masks = prompt_name_attn_masks.reshape(len(prompt_templates), len(category_names), seq_len)
         self.register_buffer("prompt_name_input_embeds", prompt_name_input_embeds)
         self.register_buffer("prompt_name_attn_masks", prompt_name_attn_masks)
-        '''
         
         # Also save the length of the part of the template before the category name
         with torch.no_grad():
@@ -305,7 +336,7 @@ class NameTuningModule(nn.Module):
                 for pre_name_template in pre_name_templates
             ]
         
-    def tuned_text_embeds(self):
+    def tuned_text_embeds(self, prompt_indices: Optional[List[int]] = None):
         masked_name_perturbation = self.name_perturbation * self.name_token_mask.unsqueeze(2)
         name_seq_len = masked_name_perturbation.shape[1]
         
@@ -325,12 +356,19 @@ class NameTuningModule(nn.Module):
         flat_text_embeds = self.vlm.text_encoder_from_word_embeddings(flat_prompt_name_input_embeds, flat_prompt_name_attn_masks)
         prompt_name_embeds = flat_text_embeds.reshape(prompt_num, category_num, -1)
         '''
+        
+        if prompt_indices is None:
+            prompt_indices = range(len(self.prompt_templates))
+        
         prompt_summed_name_embeds = None
-        for i in range(len(self.prompt_templates)):
+        for i in prompt_indices:
+            '''
             input_embeds, attn_mask = self.vlm.get_input_word_embeddings([
                 self.prompt_templates[i].format(name)
                 for name in self.category_names
             ])
+            '''
+            input_embeds, attn_mask = self.prompt_name_input_embeds[i].clone(), self.prompt_name_attn_masks[i].clone()
             offset = self.pre_name_template_lengths[i]
             input_embeds[:, offset : offset + name_seq_len] += masked_name_perturbation
             output_embeds = self.vlm.text_encoder_from_word_embeddings(input_embeds, attn_mask)
@@ -338,11 +376,11 @@ class NameTuningModule(nn.Module):
                 prompt_summed_name_embeds = output_embeds
             else:
                 prompt_summed_name_embeds += output_embeds
-        name_embeds = prompt_summed_name_embeds / len(self.prompt_templates)
+        name_embeds = prompt_summed_name_embeds / len(prompt_indices)
         return name_embeds
     
-    def forward(self, vid_embeds: torch.Tensor) -> torch.Tensor:
-        text_embeds = self.tuned_text_embeds()
+    def forward(self, vid_embeds: torch.Tensor, prompt_indices: Optional[List[int]] = None) -> torch.Tensor:
+        text_embeds = self.tuned_text_embeds(prompt_indices)
         
         if self.vlm.default_similarity_metric() == Similarity.COSINE:
             vid_embeds = F.normalize(vid_embeds, dim=1)
