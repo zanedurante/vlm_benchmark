@@ -43,14 +43,8 @@ class NameTuningFewShotClassifier(FewShotClassifier):
         self.random_augment = bool(random_augment)
         self.low_memory_training = bool(low_memory_training)
         
-        assert prompt_ensemble_id is None or prompt_ensemble_id in PROMPT_ENSEMBLES.keys(), "Unrecognized prompt_ensemble_id."
+        assert prompt_ensemble_id in PROMPT_ENSEMBLES.keys(), "Unrecognized prompt_ensemble_id."
         assert optimizer in ["sgd", "adam", "adamw"], "Invalid optimizer choice."
-        
-        # Save list of prompts
-        if prompt_ensemble_id is None:
-            self.prompt_templates = ["{}"]
-        else:
-            self.prompt_templates = PROMPT_ENSEMBLES[prompt_ensemble_id]
             
         # Save the latest progression of tuned class embeddings over epochs for visualization
         # {class name -> [orig text embed, tuned text embed epoch 0, epoch 1, ...]}
@@ -107,7 +101,7 @@ class NameTuningFewShotClassifier(FewShotClassifier):
             text_embeds = np.array([
                 [
                     self.vlm.get_text_embeds(template.format(name))
-                    for template in self.prompt_templates
+                    for template in PROMPT_ENSEMBLES[self.prompt_ensemble_id]
                 ]
                 for name in category_names
             ]).mean(axis=1)
@@ -141,7 +135,7 @@ class NameTuningFewShotClassifier(FewShotClassifier):
                 batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False
             )
             
-        module = NameTuningModule(self.vlm, category_names, self.prompt_templates)
+        module = NameTuningModule(self.vlm, category_names, PROMPT_ENSEMBLES[self.prompt_ensemble_id])
         module.to(DEVICE)
         
         optim_input = [
@@ -197,15 +191,15 @@ class NameTuningFewShotClassifier(FewShotClassifier):
                 '''
                 # Compute gradients for each prompt template individually and clear
                 grad = None
-                for prompt_index in range(len(self.prompt_templates)):
+                for prompt_index in range(len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])):
                     logits = module(vid_embeds, prompt_index=prompt_index)
                     loss = F.cross_entropy(logits, vid_labels)
                     
-                    total_loss += loss.item() * len(vid_paths) / len(self.prompt_templates)
+                    total_loss += loss.item() * len(vid_paths) / len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])
                     with torch.no_grad():
-                        total_reg_loss += 0.5 * self.name_regularization * module.name_perturbation.pow(2).sum() * len(vid_paths) / len(self.prompt_templates)
-                    total_correct += (logits.argmax(dim=1) == vid_labels).sum() / len(self.prompt_templates)
-                    total_count += len(vid_paths) / len(self.prompt_templates)
+                        total_reg_loss += 0.5 * self.name_regularization * module.name_perturbation.pow(2).sum() * len(vid_paths) / len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])
+                    total_correct += (logits.argmax(dim=1) == vid_labels).sum() / len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])
+                    total_count += len(vid_paths) / len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])
                     
                     optimizer.zero_grad()
                     loss.backward()
@@ -213,16 +207,16 @@ class NameTuningFewShotClassifier(FewShotClassifier):
                         grad = module.name_perturbation.grad.clone()
                     else:
                         grad += module.name_perturbation.grad
-                grad /= len(self.prompt_templates)
+                grad /= len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])
                 optimizer.zero_grad()
                 module.name_perturbation.grad = grad
                 optimizer.step()
                 '''
                    
                 if self.low_memory_training:
-                    prompt_indices = np.random.choice(len(self.prompt_templates), size=1)
+                    prompt_indices = np.random.choice(len(PROMPT_ENSEMBLES[self.prompt_ensemble_id]), size=1)
                 else:
-                    prompt_indices = range(len(self.prompt_templates))
+                    prompt_indices = range(len(PROMPT_ENSEMBLES[self.prompt_ensemble_id]))
                     
                 logits = module(vid_embeds, prompt_indices)
                 loss = F.cross_entropy(logits, vid_labels)

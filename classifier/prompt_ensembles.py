@@ -1,7 +1,26 @@
 '''
-Collections of fixed prompts from CLIP implementation that adapters can use
+Collections of fixed prompts that classifiers can use.
+Some are collections of the best-performing single prompts we found,
+others are from the original CLIP paper or the TIP-Adapter paper.
+The None key is used for the no-prompt scenario.
 '''
 PROMPT_ENSEMBLES = {
+    None: ["{}"],
+    "vid_action":[
+        "i am {}",
+        "the video shows me {}",
+        "a photo showing a {}",
+        "a photo showing the activity of {}"
+    ],
+    "tip_adapter": [
+        "itap of a {}",
+        "a bad photo of the {}",
+        "a origami {}",
+        "a photo of the large {}",
+        "a {} in a video game",
+        "art of the {}",
+        "a photo of the small {}"
+    ],
     "clip_kinetics": [
         'a photo of {}.',
         'a photo of a person {}.',

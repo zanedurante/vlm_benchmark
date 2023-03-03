@@ -19,7 +19,7 @@ argparser = argparse.ArgumentParser()
 argparser.add_argument("vlm", choices=["clip", "miles", "videoclip"],
                        help="VLM to run. Requires corresponding conda environment.")
 argparser.add_argument("classifier", choices=["vl_proto", "hard_prompt_weighted_text", "nearest_neighbor", "gaussian_proto",
-                                              "subvideo", "tip_adapter", "coop", "cona", "cona_tip"],
+                                              "subvideo", "tip_adapter", "coop", "cona", "cona_adapter", "name_tuning"],
                        help="Classifier to run.")
 argparser.add_argument("-d", "--dataset", nargs="+", default=["smsm", "moma_sact", "kinetics_100", "moma_act"],
                        help="Which dataset name to run on.")
@@ -142,6 +142,16 @@ elif args.classifier == "cona_adapter":
     fixed_classifier_kwargs["name_regularization"] = 20
     fixed_classifier_kwargs["adapter_regularization"] = 1e-2
     fixed_classifier_kwargs["context_len"] = 4
+elif args.classifier == "name_tuning":
+    from classifier.name_tuning import NameTuningFewShotClassifier as Classifier
+    fixed_classifier_kwargs["random_augment"] = False
+    fixed_classifier_kwargs["batch_size"] = 8
+    fixed_classifier_kwargs["optimizer"] = "adamw"
+    fixed_classifier_kwargs["epochs"] = 20
+    fixed_classifier_kwargs["low_memory_training"] = True
+    fixed_classifier_kwargs["lr"] = 1e-4
+    fixed_classifier_kwargs["name_regularization"] = 20
+    fixed_classifier_kwargs["prompt_ensemble_id"] = "clip_kinetics"
 else:
     raise ValueError("Unrecognized classifier arg")
     

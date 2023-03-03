@@ -10,6 +10,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 from SimilarityVLM import SimilarityVLM
 from similarity_metrics import Similarity
 from .base import FewShotClassifier
+from .prompt_ensembles import PROMPT_ENSEMBLES
 
 QUERY_BATCH_SIZE = 2048 # Batch size used for iterating through non-training data
 
@@ -20,7 +21,7 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
     def __init__(self, vlm: SimilarityVLM, alpha: float, beta: float,
                  finetune_epochs: int = 0, finetune_lr: float = 1e-3,
                  batch_size: int = 256, random_augment: bool = True,
-                 prompt_ensembling: Optional[str] = None):
+                 prompt_ensemble_id: Optional[str] = None):
         self.vlm = vlm
         self.alpha = float(alpha)
         self.beta = float(beta)
@@ -28,9 +29,9 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
         self.finetune_lr = float(finetune_lr)
         self.batch_size = int(batch_size)
         self.random_augment = bool(random_augment)
-        self.prompt_ensembling = str(prompt_ensembling)
+        self.prompt_ensemble_id = str(prompt_ensemble_id)
         
-        assert prompt_ensembling in [None, "tip_adapter", "vid_action"], "Unrecognized ensembling set"
+        assert prompt_ensemble_id in PROMPT_ENSEMBLES.keys(), "Unrecognized prompt_ensemble_id."
         
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
@@ -45,7 +46,7 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
             "finetune_lr": self.finetune_lr,
             "batch_size": self.batch_size,
             "random_augment": self.random_augment,
-            "prompt_ensembling": self.prompt_ensembling
+            "prompt_ensemble_id": self.prompt_ensemble_id
         }
     
     '''
@@ -75,42 +76,13 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
             n_support = support_video_paths.shape[1]
         
         # Text Embeddings
-        if self.prompt_ensembling is None:
-            text_embeds = np.array([self.vlm.get_text_embeds(name) for name in category_names])
-        elif self.prompt_ensembling == "tip_adapter":
-            tip_adapter_prompt_templates = [
-                "itap of a {}",
-                "a bad photo of the {}",
-                "a origami {}",
-                "a photo of the large {}",
-                "a {} in a video game",
-                "art of the {}",
-                "a photo of the small {}"
+        text_embeds = np.array([
+            [
+                self.vlm.get_text_embeds(template.format(name))
+                for template in PROMPT_ENSEMBLES[self.prompt_ensemble_id]
             ]
-            
-            text_embeds = np.array([
-                [
-                    self.vlm.get_text_embeds(template.format(name))
-                    for template in tip_adapter_prompt_templates
-                ]
-                for name in category_names
-            ]).mean(axis=1)
-        elif self.prompt_ensembling == "vid_action":
-            prompt_templates = [
-                "i am {}",
-                "the video shows me {}",
-                "a photo showing a {}",
-                "a photo showing the activity of {}"
-            ]
-            text_embeds = np.array([
-                [
-                    self.vlm.get_text_embeds(template.format(name))
-                    for template in prompt_templates
-                ]
-                for name in category_names
-            ]).mean(axis=1)
-        else:
-            raise NotImplementedError
+            for name in category_names
+        ]).mean(axis=1)
         
         # Query Vid Embeddings
         query_vid_embeds = np.array([self.vlm.get_video_embeds(vid_path) for vid_path in query_video_paths])
