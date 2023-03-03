@@ -431,7 +431,7 @@ for test_params in pbar:
     )
     if len(matching_test_run_results):
         print(f"Skipping hyperparam search which already has test results.")
-        print(f"Dataset: {test_dataset.id()}")
+        print(f"Dataset: {query_dataset_test.id()}")
         print(f"Test kwargs:\n{json.dumps(test_kwargs, indent=2)}")
         continue
     
