@@ -18,7 +18,7 @@ argparser = argparse.ArgumentParser()
 argparser.add_argument("vlm", choices=["clip", "miles", "videoclip"],
                        help="VLM to run. Requires corresponding conda environment")
 argparser.add_argument("classifier", choices=["vl_proto", "hard_prompt_vl_proto", "nearest_neighbor", "gaussian_proto",
-                                              "linear", "subvideo", "tip_adapter", "coop", "cona", "cona_adapter", "name_tuning"],
+                                              "linear", "subvideo", "tip_adapter", "coop", "cona", "cona_adapter", "name_tuning", "name_tuning_adapter", "coop_adapter"],
                        help="Classifier to run")
 argparser.add_argument("-d", "--dataset", nargs="+", default=["smsm", "moma_sact", "kinetics_100", "moma_act"],
                        help="Which dataset name to run on")
@@ -178,7 +178,7 @@ elif args.classifier == "tip_adapter":
     ))
     classifier_hyperparams.append(skopt.space.Categorical(
         ["tip_adapter", "vid_action"],
-        name="prompt_ensembling"
+        name="prompt_ensemble_id"
     ))
 elif args.classifier == "coop":
     from classifier import CoopFewShotClassifier as Classifier
@@ -266,6 +266,29 @@ elif args.classifier == "name_tuning":
         ["clip_kinetics"],
         name="prompt_ensemble_id"
     ))
+    
+elif args.classifier == "name_tuning_adapter":
+    from classifier.name_tuning_adapter import NameTuningAdapterFewShotClassifier as Classifier
+    fixed_classifier_kwargs["random_augment"] = False
+    fixed_classifier_kwargs["batch_size"] = 8
+    fixed_classifier_kwargs["optimizer"] = "adamw"
+    fixed_classifier_kwargs["epochs"] = 20
+    fixed_classifier_kwargs["low_memory_training"] = True
+    fixed_classifier_kwargs["lr"] = 1e-4
+    fixed_classifier_kwargs["adapter_lr_multiplier"] = 1e-1
+    fixed_classifier_kwargs["name_regularization"] = 20
+    fixed_classifier_kwargs["adapter_regularization"] = 1e-2
+    fixed_classifier_kwargs["prompt_ensemble_id"] = "tip_adapter"
+
+elif args.classifier == "coop_adapter":
+    from classifier.coop_adapter import CoopAdapterFewShotClassifier as Classifier
+    fixed_classifier_kwargs["random_augment"] = False
+    fixed_classifier_kwargs["batch_size"] = 8
+    fixed_classifier_kwargs["optimizer"] = "sgd"
+    fixed_classifier_kwargs["epochs"] = 20
+    fixed_classifier_kwargs["lr"] = 2e-3
+    fixed_classifier_kwargs["adapter_lr_multiplier"] = 1e-1
+    fixed_classifier_kwargs["adapter_regularization"] = 1e-2
     
 else:
     raise ValueError("Unrecognized classifier arg")

@@ -29,7 +29,7 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
         self.finetune_lr = float(finetune_lr)
         self.batch_size = int(batch_size)
         self.random_augment = bool(random_augment)
-        self.prompt_ensemble_id = str(prompt_ensemble_id)
+        self.prompt_ensemble_id = prompt_ensemble_id
         
         assert prompt_ensemble_id in PROMPT_ENSEMBLES.keys(), "Unrecognized prompt_ensemble_id."
         
