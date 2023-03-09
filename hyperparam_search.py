@@ -252,18 +252,17 @@ elif args.classifier == "name_tuning":
     fixed_classifier_kwargs["batch_size"] = 8
     fixed_classifier_kwargs["optimizer"] = "adamw"
     fixed_classifier_kwargs["epochs"] = 20
-    fixed_classifier_kwargs["low_memory_training"] = True
     
     classifier_hyperparams.append(skopt.space.Categorical(
-        [3e-4],
+        [1e-3, 4e-3, 1e-4, 1e-5],
         name="lr"
     ))
     classifier_hyperparams.append(skopt.space.Categorical(
-        [20],
+        [0.01, 0.1, 1, 10],
         name="name_regularization"
     ))
     classifier_hyperparams.append(skopt.space.Categorical(
-        ["clip_kinetics"],
+        ["simple_video"],
         name="prompt_ensemble_id"
     ))
     

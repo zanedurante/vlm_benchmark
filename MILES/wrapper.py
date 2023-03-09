@@ -158,7 +158,7 @@ class MILES_SimilarityVLM(SimilarityVLM):
         video_reader = decord.VideoReader(video_path, num_threads=1)
         video_len = len(video_reader)
         frame_indices = self.sample_frame_indices(video_len, subvideo_start_frame, subvideo_end_frame, random_augment)
-        frames = video_reader.get_batch(frame_indices).asnumpy()
+        frames = video_reader.get_batch(frame_indices).numpy()
 
         # Transform
         frames = torch.from_numpy(frames).float() / 255

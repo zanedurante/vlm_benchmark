@@ -6,6 +6,8 @@ The None key is used for the no-prompt scenario.
 '''
 PROMPT_ENSEMBLES = {
     None: ["{}"],
+    "simple_photo": ["a photo of {}"],
+    "simple_video": ["a video of {}"],
     "vid_action":[
         "i am {}",
         "the video shows me {}",

@@ -50,6 +50,12 @@ class NameTuningFewShotClassifier(FewShotClassifier):
         # {class name -> [orig text embed, tuned text embed epoch 0, epoch 1, ...]}
         self.text_embed_training_record = {}
         
+        # Save these parts of state after training and prediction on a few-shot task
+        # - trained input word embeddings
+        # - class probabilities for each query video
+        self.tuned_input_embeds = None
+        self.query_class_probabilities = None
+        
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
     accuracy (apart from the underlying VLM object used).
@@ -111,6 +117,12 @@ class NameTuningFewShotClassifier(FewShotClassifier):
             query_vid_embeds = np.array([self.vlm.get_video_embeds(vid_path) for vid_path in query_video_paths])
             
             query_to_text_similarities = self.vlm.default_similarity_metric()(query_vid_embeds, text_embeds)
+            
+            # Save category probabilities for each class
+            query_class_logits = (self.vlm.logit_scale() * query_to_text_similarities)
+            self.query_class_probabilities = np.exp(query_class_logits) / np.sum(np.exp(query_class_logits), axis=1, keepdims=True)
+            
+            # Return direct predictions
             query_predictions = np.argmax(query_to_text_similarities, axis=1)
             return query_predictions
         
@@ -187,31 +199,6 @@ class NameTuningFewShotClassifier(FewShotClassifier):
                         for vid_path in vid_paths
                     ], dim=0)
                 vid_labels = vid_labels.to(DEVICE)
-                
-                '''
-                # Compute gradients for each prompt template individually and clear
-                grad = None
-                for prompt_index in range(len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])):
-                    logits = module(vid_embeds, prompt_index=prompt_index)
-                    loss = F.cross_entropy(logits, vid_labels)
-                    
-                    total_loss += loss.item() * len(vid_paths) / len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])
-                    with torch.no_grad():
-                        total_reg_loss += 0.5 * self.name_regularization * module.name_perturbation.pow(2).sum() * len(vid_paths) / len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])
-                    total_correct += (logits.argmax(dim=1) == vid_labels).sum() / len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])
-                    total_count += len(vid_paths) / len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])
-                    
-                    optimizer.zero_grad()
-                    loss.backward()
-                    if grad is None:
-                        grad = module.name_perturbation.grad.clone()
-                    else:
-                        grad += module.name_perturbation.grad
-                grad /= len(PROMPT_ENSEMBLES[self.prompt_ensemble_id])
-                optimizer.zero_grad()
-                module.name_perturbation.grad = grad
-                optimizer.step()
-                '''
                    
                 if self.low_memory_training:
                     prompt_indices = np.random.choice(len(PROMPT_ENSEMBLES[self.prompt_ensemble_id]), size=1)
@@ -267,19 +254,27 @@ class NameTuningFewShotClassifier(FewShotClassifier):
         # Reload best val-tuning model state
         if val_tuning_best_model_state is not None:
             module.load_state_dict(val_tuning_best_model_state)
+        
+        # Save tuned class input text embeds
+        with torch.no_grad():
+            self.tuned_input_embeds = module.tuned_class_input_word_embeds(0)
                 
         query_dataloader = torch.utils.data.DataLoader(query_video_paths, batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
         with torch.no_grad():
-            query_predictions = []
+            query_logits = []
             for batch_idx, vid_paths in enumerate(query_dataloader):
                 batch_query_vid_embeds = torch.cat([
                     torch.from_numpy(self.vlm.get_video_embeds(vid_path)).unsqueeze(0).to(DEVICE)
                     for vid_path in vid_paths
                 ])
-                batch_query_logits = module(batch_query_vid_embeds)
-                query_predictions.append(torch.argmax(batch_query_logits, dim=1))
-            query_predictions = torch.cat(query_predictions, dim=0)
-            return query_predictions.cpu().numpy()
+                query_logits.append(module(batch_query_vid_embeds))
+            query_logits = torch.cat(query_logits, dim=0)
+            
+            # Save class probabilities
+            self.query_class_probabilities = torch.softmax(query_logits, dim=1).cpu().numpy()
+                
+            query_predictions = torch.argmax(query_logits, dim=1).cpu().numpy()
+            return query_predictions
         
         
         
@@ -329,43 +324,33 @@ class NameTuningModule(nn.Module):
                 vlm.get_input_word_embeddings([pre_name_template])[0].shape[1] - self.vlm.text_start_special_token_count() - self.vlm.text_end_special_token_count()
                 for pre_name_template in pre_name_templates
             ]
-        
-    def tuned_text_embeds(self, prompt_indices: Optional[List[int]] = None):
+            
+    def tuned_class_input_word_embeds(self, prompt_index: int):
+        """Add the current perturbation parameter to input word embeddings
+        for each class name for a single prompt.
+
+        Args:
+            prompt_index (int)
+        """
         masked_name_perturbation = self.name_perturbation * self.name_token_mask.unsqueeze(2)
         name_seq_len = masked_name_perturbation.shape[1]
         
-        '''
-        # Add each category name's masked perturbation at different location for each prompt
-        prompt_name_input_embeds = self.prompt_name_input_embeds.clone()
-        for i in range(len(self.prompt_templates)):
-            offset = self.pre_name_template_lengths[i]
-            prompt_name_input_embeds[i, :, offset : offset + name_seq_len] += masked_name_perturbation
-        '''
+        input_embeds = self.prompt_name_input_embeds[prompt_index].clone()
+        offset = self.pre_name_template_lengths[prompt_index]
+        input_embeds[:, offset : offset + name_seq_len] += masked_name_perturbation
         
-        # Compute output text embeds for each prompt and category name
-        '''
-        prompt_num, category_num, seq_len, word_embed_dim = prompt_name_input_embeds.shape
-        flat_prompt_name_input_embeds = prompt_name_input_embeds.reshape(prompt_num * category_num, seq_len, word_embed_dim)
-        flat_prompt_name_attn_masks = self.prompt_name_attn_masks.reshape(prompt_num * category_num, seq_len)
-        flat_text_embeds = self.vlm.text_encoder_from_word_embeddings(flat_prompt_name_input_embeds, flat_prompt_name_attn_masks)
-        prompt_name_embeds = flat_text_embeds.reshape(prompt_num, category_num, -1)
-        '''
+        attn_mask = self.prompt_name_attn_masks[prompt_index]
+        return input_embeds, attn_mask
         
+        
+    def tuned_text_embeds(self, prompt_indices: Optional[List[int]] = None):
         if prompt_indices is None:
             prompt_indices = range(len(self.prompt_templates))
         
         prompt_summed_name_embeds = None
         for i in prompt_indices:
-            '''
-            input_embeds, attn_mask = self.vlm.get_input_word_embeddings([
-                self.prompt_templates[i].format(name)
-                for name in self.category_names
-            ])
-            '''
-            input_embeds, attn_mask = self.prompt_name_input_embeds[i].clone(), self.prompt_name_attn_masks[i].clone()
-            offset = self.pre_name_template_lengths[i]
-            input_embeds[:, offset : offset + name_seq_len] += masked_name_perturbation
-            output_embeds = self.vlm.text_encoder_from_word_embeddings(input_embeds, attn_mask)
+            tuned_input_embeds, attn_mask = self.tuned_class_input_word_embeds(i)
+            output_embeds = self.vlm.text_encoder_from_word_embeddings(tuned_input_embeds, attn_mask)
             if prompt_summed_name_embeds is None:
                 prompt_summed_name_embeds = output_embeds
             else:

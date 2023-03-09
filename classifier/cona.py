@@ -43,6 +43,12 @@ class CoNaFewShotClassifier(FewShotClassifier):
         # {class name -> [orig text embed, tuned text embed epoch 0, epoch 1, ...]}
         self.text_embed_training_record = {}
         
+        # Save these parts of state after training and prediction on a few-shot task
+        # - trained input word embeddings
+        # - class probabilities for each query video
+        self.tuned_input_embeds = None
+        self.query_class_probabilities = None
+        
     '''
     Returns a dict with the value of all classifier-specific parameters which may affect prediction
     accuracy (apart from the underlying VLM object used).
@@ -97,6 +103,12 @@ class CoNaFewShotClassifier(FewShotClassifier):
             query_vid_embeds = np.array([self.vlm.get_video_embeds(vid_path) for vid_path in query_video_paths])
             
             query_to_text_similarities = self.vlm.default_similarity_metric()(query_vid_embeds, text_embeds)
+            
+            # Save category probabilities for each class
+            query_class_logits = (self.vlm.logit_scale() * query_to_text_similarities)
+            self.query_class_probabilities = np.exp(query_class_logits) / np.sum(np.exp(query_class_logits), axis=1, keepdims=True)
+            
+            # Return direct predictions
             query_predictions = np.argmax(query_to_text_similarities, axis=1)
             return query_predictions
         
@@ -225,19 +237,27 @@ class CoNaFewShotClassifier(FewShotClassifier):
         # Reload best val-tuning model state
         if val_tuning_best_model_state is not None:
             cona_module.load_state_dict(val_tuning_best_model_state)
+            
+        # Save tuned class input text embeds
+        with torch.no_grad():
+            self.tuned_input_embeds = cona_module.tuned_class_input_word_embeds()
                 
         query_dataloader = torch.utils.data.DataLoader(query_video_paths, batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
         with torch.no_grad():
-            query_predictions = []
+            query_logits = []
             for batch_idx, vid_paths in enumerate(query_dataloader):
                 batch_query_vid_embeds = torch.cat([
                     torch.from_numpy(self.vlm.get_video_embeds(vid_path)).unsqueeze(0).to(DEVICE)
                     for vid_path in vid_paths
                 ])
-                batch_query_logits = cona_module(batch_query_vid_embeds)
-                query_predictions.append(torch.argmax(batch_query_logits, dim=1))
-            query_predictions = torch.cat(query_predictions, dim=0)
-            return query_predictions.cpu().numpy()
+                query_logits.append(cona_module(batch_query_vid_embeds))
+            query_logits = torch.cat(query_logits, dim=0)
+            
+            # Save class probabilities
+            self.query_class_probabilities = torch.softmax(query_logits, dim=1).cpu().numpy()
+                
+            query_predictions = torch.argmax(query_logits, dim=1).cpu().numpy()
+            return query_predictions
         
                 
         
@@ -275,7 +295,10 @@ class CoNaModule(nn.Module):
         name_token_mask[:, -self.vlm.text_end_special_token_count():] = False
         self.register_buffer("name_token_mask", name_token_mask)
         
-    def tuned_text_embeds(self):
+    def tuned_class_input_word_embeds(self):
+        """Add the current perturbation parameter to input word embeddings
+        for each class name.
+        """
         # Retain only name perturbations which correspond to actual words (not special tokens or padding)
         masked_name_perturbation = self.name_perturbation * self.name_token_mask.unsqueeze(2)
         perturbed_category_name_input_embeds = self.category_name_input_embeds + masked_name_perturbation
@@ -294,7 +317,10 @@ class CoNaModule(nn.Module):
                 self.category_name_attn_masks[:, self.vlm.text_start_special_token_count():]
             ], dim=1
         )
+        return text_input_embeds, text_input_attn_masks
         
+    def tuned_text_embeds(self):
+        text_input_embeds, text_input_attn_masks = self.tuned_class_input_word_embeds()
         text_embeds = self.vlm.text_encoder_from_word_embeddings(text_input_embeds, text_input_attn_masks)
         return text_embeds
         

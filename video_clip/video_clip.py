@@ -170,6 +170,10 @@ class VideoClipVLM(SimilarityVLM):
             text_mask = text_mask.to(DEVICE)
             
         text_input_embeds = self.model.mmpt_model.model.text_encoder.embeddings.word_embeddings(text_tokens)
+        
+        max_text_len = torch.max(torch.sum(text_mask, dim=1))
+        text_input_embeds = text_input_embeds[:, :max_text_len, :]
+        text_mask = text_mask[:, :max_text_len]
         return text_input_embeds, text_mask
             
     
