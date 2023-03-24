@@ -287,8 +287,9 @@ class CoNaAdapterModule(nn.Module):
         
         # Mask for class embeddings which aren't special tokens
         name_token_mask = category_name_attn_masks.clone().type(torch.bool)
-        name_token_mask[:, :self.vlm.text_start_special_token_count()] = False
+        name_token_mask = torch.roll(name_token_mask, -self.vlm.text_end_special_token_count(), dims=1)
         name_token_mask[:, -self.vlm.text_end_special_token_count():] = False
+        name_token_mask[:, :self.vlm.text_start_special_token_count()] = False
         self.register_buffer("name_token_mask", name_token_mask)
         
         '''

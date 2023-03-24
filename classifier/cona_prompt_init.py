@@ -14,19 +14,22 @@ from .base import FewShotClassifier
 QUERY_BATCH_SIZE = 2048 # Batch size used for iterating through non-training data
 
 '''
-Implementation of our algorithm: Context Name Optimization.
+Ablated version of CoNa, in which the class-shared context vector is initialized to a text prompt,
+and regularized to stay near it.
 '''
-class CoNaFewShotClassifier(FewShotClassifier):
-    def __init__(self, vlm: SimilarityVLM, context_len: int = 16, 
-                 opt_strat: str = "joint", name_regularization: float = 1e-2,
+class CoNaPromptInitFewShotClassifier(FewShotClassifier):
+    def __init__(self, vlm: SimilarityVLM,
+                 context_prompt_init: str = "a photo of", opt_strat: str = "joint",
+                 context_regularization: float = 1e-2, name_regularization: float = 1e-2,
                  lr: float = 1e-3, epochs: int = 10,
                  warmup_lr: float = 1e-5, warmup_epochs: int = 1, 
                  batch_size: int = 1, optimizer: str = "sgd",
                  random_augment: bool = True):
         self.vlm = vlm
         
-        self.context_len = int(context_len)
+        self.context_prompt_init = str(context_prompt_init).split("{}")[0] # Remove any template slots used in other prompt formats.
         self.opt_strat = str(opt_strat)
+        self.context_regularization = float(context_regularization)
         self.name_regularization = float(name_regularization)
         self.lr = float(lr)
         self.epochs = int(epochs)
@@ -56,8 +59,9 @@ class CoNaFewShotClassifier(FewShotClassifier):
     '''
     def params(self) -> dict:
         return {
-            "context_len": self.context_len,
+            "context_prompt_init": self.context_prompt_init,
             "opt_strat": self.opt_strat,
+            "context_regularization": self.context_regularization,
             "name_regularization": self.name_regularization,
             "lr": self.lr,
             "epochs": self.epochs,
@@ -133,12 +137,12 @@ class CoNaFewShotClassifier(FewShotClassifier):
                 batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False
             )
         
-        cona_module = CoNaModule(self.vlm, category_names, self.context_len)
-        cona_module.to(DEVICE)
+        module = CoNaPromptInitModule(self.vlm, category_names, self.context_prompt_init)
+        module.to(DEVICE)
         
         optim_input = [
-            {"params": cona_module.name_perturbation, "weight_decay": self.name_regularization},
-            {"params": [param for name, param in cona_module.named_parameters() if name not in ["name_perturbation"]]}
+            {"params": module.name_perturbation, "weight_decay": self.name_regularization},
+            {"params": module.context_perturbation, "weight_decay": self.context_regularization}
         ]
         if self.optimizer == "sgd":
             optimizer = torch.optim.SGD(optim_input, lr=self.lr, weight_decay=0)
@@ -188,12 +192,13 @@ class CoNaFewShotClassifier(FewShotClassifier):
                     ], dim=0)
                 vid_labels = vid_labels.to(DEVICE)
                 
-                logits = cona_module(vid_embeds)
+                logits = module(vid_embeds)
                 loss = F.cross_entropy(logits, vid_labels)
                 
                 total_loss += loss.item() * len(vid_paths)
                 with torch.no_grad():
-                    total_reg_loss += 0.5 * self.name_regularization * cona_module.name_perturbation.pow(2).sum() * len(vid_paths)
+                    total_reg_loss += 0.5 * self.name_regularization * module.name_perturbation.pow(2).sum() * len(vid_paths)
+                    total_reg_loss += 0.5 * self.context_regularization * module.context_perturbation.pow(2).sum() * len(vid_paths)
                 total_correct += (logits.argmax(dim=1) == vid_labels).sum()
                 total_count += len(vid_paths)
                 
@@ -214,14 +219,14 @@ class CoNaFewShotClassifier(FewShotClassifier):
                     vid_labels = vid_labels.to(DEVICE)
                     
                     with torch.no_grad():
-                        logits = cona_module(vid_embeds)
+                        logits = module(vid_embeds)
                     total_val_correct += (logits.argmax(dim=1) == vid_labels).sum()
                     total_val_count += len(vid_paths)
                     
                 val_acc = total_val_correct / total_val_count
                 if val_tuning_best_acc is None or val_acc >= val_tuning_best_acc:
                     val_tuning_best_acc = val_acc
-                    val_tuning_best_model_state = deepcopy(cona_module.state_dict())
+                    val_tuning_best_model_state = deepcopy(module.state_dict())
                     
                 print(f"Epoch {epoch_idx:5}: Support Acc = {total_correct / total_count:5.3f}, Val-Tune Acc = {total_val_correct / total_val_count:5.3f}, Loss = {total_loss / total_count:5.3E}, Reg Loss = {total_reg_loss / total_count:5.3E}, Combined Loss = {(total_loss + total_reg_loss) / total_count:5.3E}")
             else:
@@ -229,18 +234,18 @@ class CoNaFewShotClassifier(FewShotClassifier):
                 
             # Save tuned text output embeds into record
             with torch.no_grad():
-                text_embeds = cona_module.tuned_text_embeds().cpu().numpy()
+                text_embeds = module.tuned_text_embeds().cpu().numpy()
                 for i, name in enumerate(category_names):
                     self.text_embed_training_record[name].append(text_embeds[i])
                 
                 
         # Reload best val-tuning model state
         if val_tuning_best_model_state is not None:
-            cona_module.load_state_dict(val_tuning_best_model_state)
+            module.load_state_dict(val_tuning_best_model_state)
             
         # Save tuned class input text embeds
         with torch.no_grad():
-            self.tuned_input_embeds = cona_module.tuned_class_input_word_embeds()
+            self.tuned_input_embeds = module.tuned_class_input_word_embeds()
                 
         query_dataloader = torch.utils.data.DataLoader(query_video_paths, batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
         with torch.no_grad():
@@ -250,7 +255,7 @@ class CoNaFewShotClassifier(FewShotClassifier):
                     torch.from_numpy(self.vlm.get_video_embeds(vid_path)).unsqueeze(0).to(DEVICE)
                     for vid_path in vid_paths
                 ])
-                query_logits.append(cona_module(batch_query_vid_embeds))
+                query_logits.append(module(batch_query_vid_embeds))
             query_logits = torch.cat(query_logits, dim=0)
             
             # Save class probabilities
@@ -262,26 +267,32 @@ class CoNaFewShotClassifier(FewShotClassifier):
                 
         
         
-class CoNaModule(nn.Module):
-    def __init__(self, vlm: SimilarityVLM, category_names: np.ndarray, context_len: int = 16):
+class CoNaPromptInitModule(nn.Module):
+    def __init__(self, vlm: SimilarityVLM, category_names: np.ndarray, context_prompt_init: str):
         super().__init__()
         
         self.vlm = vlm
         self.category_names = category_names
         
-        # Hyperparameters
-        self.context_len = context_len
+        # Orig context prompt embedding
+        # We will also remove the special tokens from the start/end of this, since we will insert it into
+        # the category name embeddings, which already have special tokens
+        with torch.no_grad():
+            context_input_embeds, context_attn_mask = vlm.get_input_word_embeddings([context_prompt_init])
+        context_start = vlm.text_start_special_token_count()
+        context_end = context_attn_mask[0].sum() - vlm.text_end_special_token_count()
+        context_input_embeds = context_input_embeds[:, context_start : context_end]
+        self.register_buffer("context_input_embeds", context_input_embeds)
+        
+        # Class-shared context tweaks
+        context_perturbation = torch.zeros_like(context_input_embeds)
+        self.context_perturbation = nn.Parameter(context_perturbation)
         
         # Orig Name embeddings
         with torch.no_grad():
             category_name_input_embeds, category_name_attn_masks = vlm.get_input_word_embeddings(category_names.tolist())
         self.register_buffer("category_name_input_embeds", category_name_input_embeds)
         self.register_buffer("category_name_attn_masks", category_name_attn_masks)
-        
-        # Class-shared context embeddings
-        context = torch.empty(1, self.context_len, vlm.input_word_embed_dim())
-        nn.init.normal_(context, std=0.02)
-        self.context = nn.Parameter(context)
         
         # Class-specific name embedding tweaks
         #name_perturbation = torch.empty_like(category_name_input_embeds)
@@ -304,17 +315,21 @@ class CoNaModule(nn.Module):
         masked_name_perturbation = self.name_perturbation * self.name_token_mask.unsqueeze(2)
         perturbed_category_name_input_embeds = self.category_name_input_embeds + masked_name_perturbation
         
+        # No masking necessary for context perturbation, since special tokens and padding are already removed
+        perturbed_context_input_embeds = self.context_input_embeds + self.context_perturbation
+        perturbed_context_input_embeds = perturbed_context_input_embeds.expand(self.category_name_input_embeds.size(0), -1, -1)
+        
         text_input_embeds = torch.cat(
             [
                 perturbed_category_name_input_embeds[:, :self.vlm.text_start_special_token_count(), :],
-                self.context.expand(self.category_name_input_embeds.size(0), -1, -1),
+                perturbed_context_input_embeds,
                 perturbed_category_name_input_embeds[:, self.vlm.text_start_special_token_count():, :]
             ], dim=1
         )
         text_input_attn_masks = torch.cat(
             [
                 self.category_name_attn_masks[:, :self.vlm.text_start_special_token_count()],
-                torch.ones(self.category_name_input_embeds.size(0), self.context_len, device=DEVICE),
+                torch.ones(*perturbed_context_input_embeds.shape[:-1], device=DEVICE),
                 self.category_name_attn_masks[:, self.vlm.text_start_special_token_count():]
             ], dim=1
         )

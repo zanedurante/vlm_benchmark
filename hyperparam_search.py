@@ -18,7 +18,8 @@ argparser = argparse.ArgumentParser()
 argparser.add_argument("vlm", choices=["clip", "miles", "videoclip"],
                        help="VLM to run. Requires corresponding conda environment")
 argparser.add_argument("classifier", choices=["vl_proto", "hard_prompt_vl_proto", "nearest_neighbor", "gaussian_proto",
-                                              "linear", "subvideo", "tip_adapter", "coop", "cona", "cona_adapter", "name_tuning", "name_tuning_adapter", "coop_adapter"],
+                                              "linear", "subvideo", "tip_adapter", "coop", "cona", "cona_adapter",
+                                              "cona_prompt_init", "name_tuning", "name_tuning_adapter", "coop_adapter"],
                        help="Classifier to run")
 argparser.add_argument("-d", "--dataset", nargs="+", default=["smsm", "moma_sact", "kinetics_100", "moma_act"],
                        help="Which dataset name to run on")
@@ -200,25 +201,41 @@ elif args.classifier == "coop":
 elif args.classifier == "cona":
     from classifier import CoNaFewShotClassifier as Classifier
     fixed_classifier_kwargs["random_augment"] = False
-    fixed_classifier_kwargs["batch_size"] = 32
+    fixed_classifier_kwargs["batch_size"] = 8
     fixed_classifier_kwargs["optimizer"] = "adamw"
-    fixed_classifier_kwargs["epochs"] = 50
-    fixed_classifier_kwargs["context_len"] = 2
+    fixed_classifier_kwargs["epochs"] = 20
+    fixed_classifier_kwargs["context_len"] = 4
     
-    ORIG_COOP_BATCH_SIZE = 32
-    ORIG_COOP_LR = 2e-3
-    equiv_lr = ORIG_COOP_LR / ORIG_COOP_BATCH_SIZE * fixed_classifier_kwargs["batch_size"]
-    
-    fixed_classifier_kwargs["warmup_lr"] = min(1e-5, 0.1 * 0.1 * equiv_lr)
-    
-    classifier_hyperparams.append(skopt.space.Real(
-        0.1 * equiv_lr, 10 * equiv_lr,
-        name="lr", prior="log-uniform"
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [1e-5],
+        name="lr"
     ))
-    classifier_hyperparams.append(skopt.space.Real(
-        1e-1, 1e1,
-        name="name_regularization", prior="log-uniform"
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [10],
+        name="name_regularization"
     ))
+    
+elif args.classifier == "cona_prompt_init":
+    from classifier import CoNaPromptInitFewShotClassifier as Classifier
+    fixed_classifier_kwargs["random_augment"] = False
+    fixed_classifier_kwargs["batch_size"] = 8
+    fixed_classifier_kwargs["optimizer"] = "adamw"
+    fixed_classifier_kwargs["epochs"] = 20
+    fixed_classifier_kwargs["context_prompt_init"] = "a photo of"
+    
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [1e-5],
+        name="lr"
+    ))
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [10],
+        name="name_regularization"
+    ))
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [10],
+        name="context_regularization"
+    ))
+    
     
 elif args.classifier == "cona_adapter":
     from classifier import CoNaAdapterFewShotClassifier as Classifier
