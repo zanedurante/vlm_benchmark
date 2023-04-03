@@ -1,5 +1,5 @@
 # General setup (works for all VLMs)
-# Working as of 2022-11-16
+# Working as of 2023-04-03
 # TODO: Add instructions for adding repositories
 git submodule update --init
 
@@ -8,6 +8,11 @@ git submodule update --init
 conda create --name vlm_env python=3.8 -y
 conda activate vlm_env
 
+# Install MOMA (assumes current directory)
+cd dataset/moma
+pip install -e .
+pip install jsbeautifier==1.14.4
+
 # For V100 GPUs:
 conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.3 -c pytorch -y
 # For A100 GPUs:
@@ -15,13 +20,11 @@ pip install torch==1.9.0+cu111 torchvision==0.10.0+cu111 torchaudio==0.9.0 -f ht
 # Alternate for compatibility with MILES?
 conda install pytorch torchvision torchaudio pytorch-cuda=11.6 -c pytorch -c nvidia -y
 
-
 conda install -c huggingface transformers==4.14.1 tokenizers==0.10.3 -y
 conda install pandas -y
 pip install decord ftfy tqdm regex filelock
-conda install ipykernel ipywidgets -y
-conda install matplotlib -y
-
+conda install ipykernel ipywidgets matplotlib -y
+pip install pytorchvideo scikit-optimize
 
 # MILES installs
 pip install psutil humanize scipy einops dominate sacred neptune-contrib opencv-python ftfy timm==0.4.5
@@ -58,8 +61,3 @@ mkdir -p runs/retri/videoclip
 cd runs/retri/videoclip
 wget https://dl.fbaipublicfiles.com/MMPT/retri/videoclip/checkpoint_best.pt
 cd ../../../../..
-
-pip install pytorchvideo scikit-optimize
-
-# Install MOMA
-pip install jsbeautifier==1.14.4
