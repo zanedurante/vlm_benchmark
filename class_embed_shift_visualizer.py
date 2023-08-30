@@ -69,20 +69,6 @@ cona = CoNaFewShotClassifier(
     random_augment=False
 )
 
-from classifier.cona_adapter import CoNaAdapterFewShotClassifier
-cona_adapter = CoNaAdapterFewShotClassifier(
-    vlm,
-    lr=1e-3,
-    epochs=N_EPOCHS,
-    optimizer="adamw",
-    adapter_lr_multiplier=0.1,
-    name_regularization=1,
-    adapter_regularization=1e-2,
-    context_len=CONTEXT_LEN,
-    batch_size=BATCH_SIZE,
-    random_augment=False
-)
-
 
 '''
 Dataset Setup
@@ -113,7 +99,6 @@ test_handler = FewShotTestHandler(None)
 
 test_handler.run_few_shot_test(coop, query_dataset, support_dataset, n_way, n_support, n_query=None, n_episodes=1, val_tuning_dataset=val_tuning_dataset)
 test_handler.run_few_shot_test(cona, query_dataset, support_dataset, n_way, n_support, n_query=None, n_episodes=1, val_tuning_dataset=val_tuning_dataset)
-test_handler.run_few_shot_test(cona_adapter, query_dataset, support_dataset, n_way, n_support, n_query=None, n_episodes=1, val_tuning_dataset=val_tuning_dataset)
 
 
 
@@ -124,7 +109,6 @@ category_paths = [dataset.data_dict[name] for name in category_names]
 # Record saved as {class name -> [orig text embed, tuned text embed epoch 0, epoch 1, ...]}
 coop_text_embeds_per_category = [coop.text_embed_training_record[name] for name in category_names]
 cona_text_embeds_per_category = [cona.text_embed_training_record[name] for name in category_names]
-cona_adapter_text_embeds_per_category = [cona_adapter.text_embed_training_record[name] for name in category_names]
 
 vid_embeds_per_category = [
     [
@@ -136,7 +120,7 @@ vid_embeds_per_category = [
 
 
 
-for use_vids in [False, True]:
+for use_vids in [False]:
     '''
     T-SNE Embedding Compute
     '''
@@ -144,11 +128,10 @@ for use_vids in [False, True]:
     stacked_embeddings = []
     coop_text_stacked_indices = []
     cona_text_stacked_indices = []
-    cona_adapter_text_stacked_indices = []
     vid_stacked_indices = []
 
     next_index = 0
-    for coop_text_embeds, cona_text_embeds, cona_adapter_text_embeds, vid_embeds in zip(coop_text_embeds_per_category, cona_text_embeds_per_category, cona_adapter_text_embeds_per_category, vid_embeds_per_category):
+    for coop_text_embeds, cona_text_embeds, vid_embeds in zip(coop_text_embeds_per_category, cona_text_embeds_per_category, vid_embeds_per_category):
         stacked_embeddings += coop_text_embeds
         coop_text_stacked_indices.append([next_index + i for i in range(len(coop_text_embeds))])
         next_index += len(coop_text_embeds)
@@ -156,10 +139,6 @@ for use_vids in [False, True]:
         stacked_embeddings += cona_text_embeds
         cona_text_stacked_indices.append([next_index + i for i in range(len(cona_text_embeds))])
         next_index += len(cona_text_embeds)
-        
-        stacked_embeddings += cona_adapter_text_embeds
-        cona_adapter_text_stacked_indices.append([next_index + i for i in range(len(cona_adapter_text_embeds))])
-        next_index += len(cona_adapter_text_embeds)
         
         if use_vids:
             stacked_embeddings += vid_embeds
@@ -203,14 +182,6 @@ for use_vids in [False, True]:
         for single_category_text_stacked_indices in cona_text_stacked_indices
     ]
 
-    cona_adapter_text_sne_embeds_per_category = [
-        [
-            sne_embeddings[stack_ind]
-            for stack_ind in single_category_text_stacked_indices
-        ]
-        for single_category_text_stacked_indices in cona_adapter_text_stacked_indices
-    ]
-
     if use_vids:
         vid_sne_embeds_per_category = [
             np.array([
@@ -225,15 +196,15 @@ for use_vids in [False, True]:
     '''
     Plot text embeds alone then alongside videos 
     '''
-    method_names = ["CoOp", "CoNa (ours)", "CoN-Adapter (ours)"]
-    method_sne_embeds_per_category = [coop_text_sne_embeds_per_category, cona_text_sne_embeds_per_category, cona_adapter_text_sne_embeds_per_category]
+    method_names = ["CoOp", "CoNa (ours)"]
+    method_sne_embeds_per_category = [coop_text_sne_embeds_per_category, cona_text_sne_embeds_per_category]
 
-    fig, axs = plt.subplots(3, N_COLS, figsize=(5 * N_COLS, 15), sharex=True, sharey=True)
-    for row_ind, classifier_name, text_sne_embeds_per_category in zip(range(3), method_names, method_sne_embeds_per_category):
+    fig, axs = plt.subplots(2, N_COLS, figsize=(5 * N_COLS, 15), sharex=True, sharey=True)
+    for row_ind, classifier_name, text_sne_embeds_per_category in zip(range(2), method_names, method_sne_embeds_per_category):
         for col_ind, record_ind in enumerate(np.round(np.linspace(0, N_EPOCHS, num=N_COLS, endpoint=True)).astype(int)):
             ax = axs[row_ind, col_ind]
             ax.tick_params(left = False, bottom = False, labelleft = False, labelbottom = False)
-            if row_ind == 2:
+            if row_ind == 1:
                 ax.set_xlabel(f"{record_ind} Epochs", fontsize=30)
             if col_ind == 0:
                 ax.set_ylabel(classifier_name, fontsize=30)
@@ -250,12 +221,12 @@ for use_vids in [False, True]:
     plt.show()
 
     if use_vids:
-        fig, axs = plt.subplots(3, N_COLS, figsize=(5 * N_COLS, 15), sharex=True, sharey=True)
-        for row_ind, classifier_name, text_sne_embeds_per_category in zip(range(3), method_names, method_sne_embeds_per_category):
+        fig, axs = plt.subplots(2, N_COLS, figsize=(5 * N_COLS, 15), sharex=True, sharey=True)
+        for row_ind, classifier_name, text_sne_embeds_per_category in zip(range(2), method_names, method_sne_embeds_per_category):
             for col_ind, record_ind in enumerate(np.round(np.linspace(0, N_EPOCHS, num=N_COLS, endpoint=True)).astype(int)):
                 ax = axs[row_ind, col_ind]
                 ax.tick_params(left = False, bottom = False, labelleft = False, labelbottom = False)
-                if row_ind == 2:
+                if row_ind == 1:
                     ax.set_xlabel(f"{record_ind} Epochs", fontsize=30)
                 if col_ind == 0:
                     ax.set_ylabel(classifier_name, fontsize=30)
