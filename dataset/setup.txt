@@ -1,3 +1,0 @@
-Install these in addition to VLM-specific packages
-
-pip install jsbeautifier==1.14.4

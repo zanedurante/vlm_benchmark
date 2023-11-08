@@ -65,8 +65,9 @@ class FewShotTestHandler:
         # Load dataset to generate tasks with the desired params
         try:
             few_shot_dataset = FewShotTaskDataset(query_dataset, support_dataset, n_episodes, n_way, n_support, n_query, val_tuning_dataset)
-        except ValueError:
+        except ValueError as e:
             # Skip invalid tests (if dataset too small, etc)
+            print(e)
             return None
         
         task_accuracies = []

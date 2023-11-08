@@ -15,13 +15,13 @@ from similarity_metrics import Similarity
 from plotting_utils import plot
 
 argparser = argparse.ArgumentParser()
-argparser.add_argument("vlm", choices=["clip", "miles", "videoclip"],
+argparser.add_argument("vlm", choices=["clip", "miles", "videoclip", "vifi"],
                        help="VLM to run. Requires corresponding conda environment")
 argparser.add_argument("classifier", choices=["vl_proto", "hard_prompt_vl_proto", "nearest_neighbor", "gaussian_proto",
                                               "linear", "subvideo", "tip_adapter", "coop", "cona", "cona_adapter",
                                               "cona_prompt_init", "name_tuning", "name_tuning_adapter", "coop_adapter"],
                        help="Classifier to run")
-argparser.add_argument("-d", "--dataset", nargs="+", default=["smsm", "moma_sact", "kinetics_100", "moma_act"],
+argparser.add_argument("-d", "--dataset", nargs="+", default=["smsm", "moma_sact", "kinetics_100", "moma_act", "hmdb_51", "ucf_101", "ssv2"],
                        help="Which dataset name to run on")
 argparser.add_argument("-s", "--n_shots", nargs="+", type=int, default=[1,2,4,8,16],
                        help="Number of shots to run on")
@@ -98,6 +98,10 @@ elif args.vlm == "univl":
     from UNIVL.wrapper import UniVL_SimilarityVLM as VLM
 elif args.vlm == "vttwins":
     from VTTWINS.wrapper import VTTWINS_SimilarityVLM as VLM
+elif args.vlm == "vifi":
+    from VIFI_CLIP.wrapper import ViFiCLIP_SimilarityVLM as VLM
+    fixed_vlm_kwargs["num_frames"] = 32
+    fixed_vlm_kwargs["load_vifi"] = True
 else:
     raise NotImplementedError
 

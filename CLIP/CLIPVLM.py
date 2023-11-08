@@ -61,6 +61,9 @@ class ClipVLM(SimilarityVLM):
         
     def logit_scale(self) -> float:
         return 100
+    
+    def output_embed_dim(self) -> int:
+        return 512
         
     def input_word_embed_dim(self) -> int:
         return 512

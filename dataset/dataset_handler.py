@@ -4,6 +4,9 @@ import json, itertools
 import numpy as np
 from tqdm.autonotebook import tqdm
 import torch
+from patoolib import extract_archive
+from collections import defaultdict
+import re
 
 from SimilarityVLM import SimilarityVLM
 
@@ -19,9 +22,13 @@ TODO: Remove moma repo as submodule, instead add instructions to clone it (anywh
 FILE_DIR = os.path.dirname(os.path.realpath(__file__))
 MOMA_REPO = os.path.join(FILE_DIR, "moma")
 
-KINETICS_100_DIR = "/home/datasets/kinetics_100"
+KINETICS_100_DIR = "D:\\datasets\\PAC\\few_shot_act_reg\\kinetics_100"
 SMSM_DIR = "/home/datasets/smsm_cmn"
 MOMA_DIR = "/home/datasets/moma"
+HMDB_51_DIR = "D:\\datasets\\PAC\\few_shot_act_reg\\hmdb_51"
+UCF_101_DIR = "D:\\datasets\\PAC\\few_shot_act_reg\\ucf_101"
+SSV2_DIR = "D:\\datasets\\PAC\\few_shot_act_reg\\ssv2"
+
 
 DEFAULT_MIN_TRAIN_VIDS = 16
 
@@ -93,7 +100,7 @@ class DatasetHandler:
             Keys are category names
             Values are lists of all video paths associated with that category name.
         '''
-        self.data_dict = {}
+        self.data_dict = defaultdict(list)
         
         if name in ["kinetics_100", "smsm"]:
             # Both of these datasets come from the FSL-Video repo, and both use the splits from CMN: https://github.com/ffmpbgrnn/CMN
@@ -168,6 +175,232 @@ class DatasetHandler:
                 ids = moma.get_ids_sact(split=split if split != "all" else None, cnames_sact=[category_name])
                 category_video_paths = moma.get_paths(ids_sact=ids)
                 self.data_dict[category_name] = category_video_paths
+                
+        elif name == "hmdb_51":
+            # Extract video and split info from original compressed formats, if necessary
+            if not os.path.exists(os.path.join(HMDB_51_DIR, "data")):
+                print("Extracting HMDB-51 videos from original format")
+                extract_archive(os.path.join(HMDB_51_DIR, "hmdb51_org.rar"), outdir=os.path.join(HMDB_51_DIR, "data"))
+                for file in os.listdir(os.path.join(HMDB_51_DIR, "data")):
+                    if file.endswith(".rar"):
+                        extract_archive(os.path.join(HMDB_51_DIR, "data", file), outdir=os.path.join(HMDB_51_DIR, "data"))
+                        os.remove(os.path.join(HMDB_51_DIR, "data", file))       
+            if not os.path.exists(os.path.join(HMDB_51_DIR, "splits")):
+                print("Extracting HMDB-51 split information from original format")
+                extract_archive(os.path.join(HMDB_51_DIR, "test_train_splits.rar"), outdir=HMDB_51_DIR)
+
+                # Collect train/val/test relative video paths (for each split number)
+                # Original format only has train and test splits, so train set is split randomly into train and val splits (50 and 20 videos per category respectively)
+                train_val_split_generator = torch.Generator().manual_seed(42)
+                train_paths = defaultdict(list)
+                val_paths = defaultdict(list)
+                test_paths = defaultdict(list)
+                for file in os.listdir(os.path.join(HMDB_51_DIR, "testTrainMulti_7030_splits")):
+                    split_number = int(file[-5])
+                    category_dir = "_".join(file.split("_")[:-2])
+                    category_train_val_paths = defaultdict(list)
+                    category_test_paths = defaultdict(list)
+                    with open(os.path.join(HMDB_51_DIR, "testTrainMulti_7030_splits", file), "r") as fp:
+                        for line in fp.readlines():
+                            line = line.split(" ")
+                            vid_filename = line[0]
+                            vid_type = line[1]
+                            if vid_type == "0":
+                                continue
+                            elif vid_type == "1":
+                                category_train_val_paths[split_number].append(f"{category_dir}/{vid_filename}")
+                            elif vid_type == "2":
+                                category_test_paths[split_number].append(f"{category_dir}/{vid_filename}")
+                            else:
+                                raise ValueError
+                    for split_number, paths in category_train_val_paths.items():
+                        train, val = torch.utils.data.random_split(paths, [50, 20], generator=train_val_split_generator)
+                        train_paths[split_number] += train
+                        val_paths[split_number] += val
+                    for split_number, paths in category_test_paths.items():
+                        test_paths[split_number] += paths
+                            
+                    os.remove(os.path.join(HMDB_51_DIR, "testTrainMulti_7030_splits", file))
+                os.rmdir(os.path.join(HMDB_51_DIR, "testTrainMulti_7030_splits"))
+                
+                # Save train/test video paths to split files
+                os.makedirs(os.path.join(HMDB_51_DIR, "splits"), exist_ok=True)
+                for split_number, video_paths in train_paths.items():
+                    with open(os.path.join(HMDB_51_DIR, "splits", f"train_split{split_number}.txt"), "w") as fp:
+                        fp.write("\n".join(video_paths))
+                for split_number, video_paths in val_paths.items():
+                    with open(os.path.join(HMDB_51_DIR, "splits", f"val_split{split_number}.txt"), "w") as fp:
+                        fp.write("\n".join(video_paths))
+                for split_number, video_paths in test_paths.items():
+                    with open(os.path.join(HMDB_51_DIR, "splits", f"test_split{split_number}.txt"), "w") as fp:
+                        fp.write("\n".join(video_paths))
+                        
+            # Construct data_dict from split 1
+            if split_type == "video":
+                if split in ["train", "val", "test"]:
+                    with open(os.path.join(HMDB_51_DIR, "splits", f"{split}_split1.txt"), "r") as fp:
+                        for line in fp.readlines():
+                            line = line.strip().split("/")
+                            category_folder_name = line[0]
+                            category_name = category_folder_name.replace("_", " ")
+                            video_file = line[1]
+                            self.data_dict[category_name].append(os.path.join(HMDB_51_DIR, "data", category_folder_name, video_file))
+                elif split == "all":
+                    for partial_split in ["train", "val", "test"]:
+                        with open(os.path.join(HMDB_51_DIR, "splits", f"{partial_split}_split1.txt"), "r") as fp:
+                            for line in fp.readlines():
+                                line = line.strip().split("/")
+                                category_folder_name = line[0]
+                                category_name = category_folder_name.replace("_", " ")
+                                video_file = line[1]
+                                self.data_dict[category_name].append(os.path.join(HMDB_51_DIR, "data", category_folder_name, video_file))
+                
+            elif split_type == "class":
+                # TODO
+                raise NotImplementedError
+            
+        elif name == "ucf_101":
+            # Extract video and split info from original compressed formats, if necessary
+            if not os.path.exists(os.path.join(UCF_101_DIR, "data")):
+                print("Extracting UCF-101 videos from original format")
+                extract_archive(os.path.join(UCF_101_DIR, "UCF101.rar"), outdir=os.path.join(UCF_101_DIR))
+                os.rename(os.path.join(UCF_101_DIR, "UCF-101"), os.path.join(UCF_101_DIR, "data"))
+            if not os.path.exists(os.path.join(UCF_101_DIR, "splits")):
+                print("Extracting UCF-101 split information from original format")
+                extract_archive(os.path.join(UCF_101_DIR, "UCF101TrainTestSplits-RecognitionTask.zip"), outdir=UCF_101_DIR)
+
+                # Collect train/val/test relative video paths (for each split number)
+                # Original format only has train and test splits, so train set is split randomly into train and val splits (75%/25% per category)
+                train_val_split_generator = torch.Generator().manual_seed(42)
+                train_paths = defaultdict(list)
+                val_paths = defaultdict(list)
+                test_paths = defaultdict(list)
+                for split_number in [1, 2, 3]:
+                    # Train/Val Split - Group entries per category, then randomly split into train and val sets
+                    train_val_paths_per_category = defaultdict(list)
+                    with open(os.path.join(UCF_101_DIR, "ucfTrainTestlist", f"trainlist0{split_number}.txt"), "r") as fp:
+                        for line in fp.readlines():
+                            line = line.strip().split(" ")[0].split("/")
+                            category_dir = line[0]
+                            video_file = line[1]
+                            train_val_paths_per_category[category_dir].append(f"{category_dir}/{video_file}")
+                    for category_dir, paths in train_val_paths_per_category.items():
+                        train, val = torch.utils.data.random_split(paths, [0.75, 0.25], generator=train_val_split_generator)
+                        train_paths[split_number] += train
+                        val_paths[split_number] += val
+                    
+                    # Test split
+                    with open(os.path.join(UCF_101_DIR, "ucfTrainTestlist", f"testlist0{split_number}.txt"), "r") as fp:
+                        for line in fp.readlines():
+                            line = line.strip().split(" ")[0].split("/")
+                            category_dir = line[0]
+                            video_file = line[1]
+                            test_paths[split_number].append(f"{category_dir}/{video_file}")
+                            
+                # Remove extracted split folder
+                for file in os.listdir(os.path.join(UCF_101_DIR, "ucfTrainTestlist")):
+                    os.remove(os.path.join(UCF_101_DIR, "ucfTrainTestlist", file))
+                os.rmdir(os.path.join(UCF_101_DIR, "ucfTrainTestlist"))
+                
+                # Save formatted splits to new "splits" folder
+                os.makedirs(os.path.join(UCF_101_DIR, "splits"), exist_ok=True)
+                for split_number, video_paths in train_paths.items():
+                    with open(os.path.join(UCF_101_DIR, "splits", f"train_split{split_number}.txt"), "w") as fp:
+                        fp.write("\n".join(video_paths))
+                for split_number, video_paths in val_paths.items():
+                    with open(os.path.join(UCF_101_DIR, "splits", f"val_split{split_number}.txt"), "w") as fp:
+                        fp.write("\n".join(video_paths))
+                for split_number, video_paths in test_paths.items():
+                    with open(os.path.join(UCF_101_DIR, "splits", f"test_split{split_number}.txt"), "w") as fp:
+                        fp.write("\n".join(video_paths))
+                        
+            # Construct data_dict from split 1
+            if split_type == "video":
+                if split in ["train", "val", "test"]:
+                    with open(os.path.join(UCF_101_DIR, "splits", f"{split}_split1.txt"), "r") as fp:
+                        for line in fp.readlines():
+                            line = line.strip().split("/")
+                            category_folder_name = line[0]
+                            category_name = " ".join(re.findall('[A-Z][^A-Z]*', category_folder_name)).lower()
+                            video_file = line[1]
+                            self.data_dict[category_name].append(os.path.join(UCF_101_DIR, "data", category_folder_name, video_file))
+                elif split == "all":
+                    for partial_split in ["train", "val", "test"]:
+                        with open(os.path.join(UCF_101_DIR, "splits", f"{partial_split}_split1.txt"), "r") as fp:
+                            for line in fp.readlines():
+                                line = line.strip().split("/")
+                                category_folder_name = line[0]
+                                category_name = " ".join(re.findall('[A-Z][^A-Z]*', category_folder_name)).lower()
+                                video_file = line[1]
+                                self.data_dict[category_name].append(os.path.join(UCF_101_DIR, "data", category_folder_name, video_file))
+                
+            elif split_type == "class":
+                # TODO
+                raise NotImplementedError
+        
+        elif name == "ssv2":
+            # To match ViFi-CLIP (which provides results on validation set), we ignore the official test set,
+            # and instead use the official validation set as our test split.
+            # The official train set is randomly split into train and val sets
+            # This is also helpful since it avoids the official test set, which only includes 154 / 174 classes.
+            if split_type == "video":
+                if split in ["train", "val"]:
+                    with open(os.path.join(SSV2_DIR, "labels", "train.json"), "r") as fp:
+                        label_info = json.load(fp)
+                    train_val_data = defaultdict(list)
+                    for vid_info in label_info:
+                        category_name = vid_info["template"].replace("[something]", "something").lower()
+                        video_path = os.path.join(SSV2_DIR, "20bn-something-something-v2", f"{vid_info['id']}.webm")
+                        train_val_data[category_name].append(video_path)
+                    # Entries in label json are already randomly ordered, so our train/val split can just use that order
+                    for category_name, video_paths in train_val_data.items():
+                        num_train = int(0.75 * len(video_paths))
+                        if split == "train":
+                            self.data_dict[category_name] = video_paths[:num_train]
+                        else:
+                            self.data_dict[category_name] = video_paths[num_train:]
+                elif split == "test":
+                    with open(os.path.join(SSV2_DIR, "labels", "validation.json"), "r") as fp:
+                        label_info = json.load(fp)
+                    for vid_info in label_info:
+                        category_name = vid_info["template"].replace("[something]", "something").lower()
+                        video_path = os.path.join(SSV2_DIR, "20bn-something-something-v2", f"{vid_info['id']}.webm")
+                        self.data_dict[category_name].append(video_path)
+                elif split == "all":
+                    raise NotImplementedError
+                        
+                        
+                        
+                """
+                if split == "train":
+                    with open(os.path.join(SSV2_DIR, "labels", "train.json"), "r") as fp:
+                        label_info = json.load(fp)
+                    for vid_info in label_info:
+                        category_name = vid_info["template"].replace("[something]", "something").lower()
+                        video_path = os.path.join(SSV2_DIR, "20bn-something-something-v2", f"{vid_info['id']}.webm")
+                        self.data_dict[category_name].append(video_path)
+                elif split == "val":
+                    with open(os.path.join(SSV2_DIR, "labels", "validation.json"), "r") as fp:
+                        label_info = json.load(fp)
+                    for vid_info in label_info:
+                        category_name = vid_info["template"].replace("[something]", "something").lower()
+                        video_path = os.path.join(SSV2_DIR, "20bn-something-something-v2", f"{vid_info['id']}.webm")
+                        self.data_dict[category_name].append(video_path)
+                elif split == "test":
+                    # Test labels are in a csv format rather than json
+                    with open(os.path.join(SSV2_DIR, "labels", "test-answers.csv"), "r") as fp:
+                        for line in fp.readlines():
+                            line = line.strip().split(";")
+                            category_name = line[1].lower()
+                            video_path = os.path.join(SSV2_DIR, "20bn-something-something-v2", f"{line[0]}.webm")
+                            self.data_dict[category_name].append(video_path)
+                elif split == "all":
+                    raise NotImplementedError
+                """
+                
+            elif split_type == "class":
+                raise NotImplementedError
+        
         
         else:
             raise ValueError(f"Unrecognized dataset name: {name}")

@@ -12,3 +12,4 @@ from .cona import CoNaFewShotClassifier
 from .cona_prompt_init import CoNaPromptInitFewShotClassifier
 from .cona_adapter import CoNaAdapterFewShotClassifier
 from .name_tuning import NameTuningFewShotClassifier
+from .vl_prompt import VLPromptFewShotClassifier

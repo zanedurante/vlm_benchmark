@@ -24,7 +24,7 @@ conda install -c huggingface transformers==4.14.1 tokenizers==0.10.3 -y
 conda install pandas -y
 pip install decord ftfy tqdm regex filelock
 conda install ipykernel ipywidgets matplotlib -y
-pip install pytorchvideo scikit-optimize
+pip install pytorchvideo scikit-optimize patool yacs mmcv-full
 
 # MILES installs
 pip install psutil humanize scipy einops dominate sacred neptune-contrib opencv-python ftfy timm==0.4.5

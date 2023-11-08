@@ -67,10 +67,15 @@ class MILES_SimilarityVLM(SimilarityVLM):
         self.model.text_model.eval()
         self.model.video_model.eval()
         
+        decord.bridge.set_bridge("torch")
+        
         super().__init__(cache_file=os.path.join(FILE_DIR, CACHE_NAME), reset_cache=reset_cache)
         
     def logit_scale(self) -> float:
         return LOGIT_SCALE
+        
+    def output_embed_dim(self) -> int:
+        return EMBED_DIM
         
     def input_word_embed_dim(self) -> int:
         return INPUT_WORD_EMBED_DIM
@@ -158,10 +163,10 @@ class MILES_SimilarityVLM(SimilarityVLM):
         video_reader = decord.VideoReader(video_path, num_threads=1)
         video_len = len(video_reader)
         frame_indices = self.sample_frame_indices(video_len, subvideo_start_frame, subvideo_end_frame, random_augment)
-        frames = video_reader.get_batch(frame_indices).numpy()
-
+        frames = video_reader.get_batch(frame_indices)
+        
         # Transform
-        frames = torch.from_numpy(frames).float() / 255
+        frames = frames.float() / 255
         frames = frames.permute(0, 3, 1, 2)
         if random_augment:
             frames = VIDEO_TRANSFORM_DICT["train"](frames)
