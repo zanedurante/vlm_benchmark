@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from tqdm.autonotebook import tqdm
 import json
+import torch
 
 from SimilarityVLM import SimilarityVLM
 from classifier import FewShotClassifier
@@ -71,33 +72,27 @@ class FewShotTestHandler:
             return None
         
         task_accuracies = []
-        total_queries = 0
-        total_correct = 0
         dataset_iter = tqdm(few_shot_dataset, leave=False)
         for category_names, support_vid_paths, query_vid_paths, query_vid_labels, val_tuning_vid_paths, val_tuning_vid_labels in dataset_iter:
                 
-            query_predictions = classifier.predict(category_names, support_vid_paths, query_vid_paths, val_tuning_vid_paths, val_tuning_vid_labels)
+            task_accuracy = classifier.predict(category_names, support_vid_paths, query_vid_paths, query_vid_labels, val_tuning_vid_paths, val_tuning_vid_labels)
             
-            # Compute accuracy for this sampled task
-            correct_predictions = np.sum(query_predictions == query_vid_labels)
-            task_accuracy = correct_predictions / len(query_vid_paths)
             task_accuracies.append(task_accuracy)
             
             # Aggregate for accuracy over all sampled tasks
-            total_queries += len(query_vid_paths)
-            total_correct += correct_predictions
-            dataset_iter.set_postfix({"accuracy": total_correct / total_queries})
+            dataset_iter.set_postfix({"accuracy": sum(task_accuracies) / len(task_accuracies)})
         
         # TODO: Look into other error/confidence-bound measures we should save
         # - Uncertainty in performance given a particular set of support videos (decreases with number of queries)
         # - Uncertainty in performance over a variety of support videos (decreases with number of sampled tasks (n_episodes))
-        accuracy = total_correct / total_queries
+        accuracy = sum(task_accuracies) / len(task_accuracies)
         accuracy_std = np.std(task_accuracies)
         
         # Add to test results and save
         self.results = append_test_result(self.results, classifier, query_dataset, support_dataset, n_way, n_support, n_query, n_episodes, val_tuning_dataset, accuracy, accuracy_std)
         if self.test_results_path is not None:
-            self.results.to_csv(self.test_results_path, index=False)
+            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                self.results.to_csv(self.test_results_path, index=False)
             
         return accuracy
         

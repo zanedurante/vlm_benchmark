@@ -10,13 +10,24 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 from SimilarityVLM import SimilarityVLM
 from similarity_metrics import Similarity
 from . import clip
+from vifi_utils.pipeline import Compose
 
 # Pretrained State
 FILE_DIR = os.path.dirname(os.path.realpath(__file__))
-PRETRAINED_CHECKPOINT_PATH = os.path.join(FILE_DIR, "pretrained/vifi_clip_10_epochs_k400_full_finetuned.pth")
+PRETRAINED_CHECKPOINT_DIR = os.path.join(FILE_DIR, "pretrained")
+VIFI_CHECKPOINT_PATH = os.path.join(PRETRAINED_CHECKPOINT_DIR, "vifi_clip_10_epochs_k400_full_finetuned.pth")
 
 # Cache file location
 CACHE_NAME = "cache"
+
+# Default augmentation settings
+LABEL_SMOOTH = 0.1
+COLOR_JITTER = 0.8
+GRAY_SCALE = 0.2
+#MIXUP = 0.8
+#CUTMIX = 1.0
+#MIXUP_SWITCH_PROB = 0.5
+INPUT_SIZE = 224
 
 
 
@@ -31,7 +42,7 @@ class ViFiCLIP_SimilarityVLM(SimilarityVLM):
         self.load_vifi = load_vifi
         
         # Build CLIP model from online checkpoint (ViT-16)
-        original_model_path = clip._download(clip._MODELS["ViT-B/16"])
+        original_model_path = clip._download(clip._MODELS["ViT-B/16"], root=PRETRAINED_CHECKPOINT_DIR)
         try:
             # loading JIT archive
             state_dict = torch.jit.load(original_model_path, map_location="cpu").eval().state_dict()
@@ -42,7 +53,7 @@ class ViFiCLIP_SimilarityVLM(SimilarityVLM):
         
         # Update weights based on ViFiCLIP checkpoint (requires renaming since ViFi trained with a custom module)
         if load_vifi:
-            state_dict = torch.load(PRETRAINED_CHECKPOINT_PATH, map_location="cpu")
+            state_dict = torch.load(VIFI_CHECKPOINT_PATH, map_location="cpu")
             state_dict = state_dict["model"]
             for key in list(state_dict.keys()):
                 if key.startswith("module.image_encoder."):
@@ -55,16 +66,53 @@ class ViFiCLIP_SimilarityVLM(SimilarityVLM):
                     state_dict[key.replace("module.", "")] = state_dict.pop(key)
             self.model.load_state_dict(state_dict, strict=False)
 
+        # TEMP: Convert all clip weights to fp32 for torch amp autocasting
+        self.model.float()
+            
         # Finalize clip model
         self.model.eval()
         self.model.to(DEVICE)
         self.model.requires_grad_(False)
         
         # Initialize preprocess transform
+        """
         self.image_preprocessor = transforms.Compose([
             transforms.Resize(self.model.visual.input_resolution, interpolation=transforms.InterpolationMode.BICUBIC),
             transforms.CenterCrop(self.model.visual.input_resolution),
             transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
+        ])
+        """
+        scale_resize = 256 / 224 * INPUT_SIZE
+        self.frame_loader = Compose([
+            dict(type='DecordInit'),
+            dict(type='SampleFrames', clip_len=1, frame_interval=1, num_clips=self.num_frames, test_mode=True),
+            dict(type='DecordDecode'),
+            dict(type='Resize', scale=(-1, scale_resize)),
+            dict(type='CenterCrop', crop_size=INPUT_SIZE),
+            dict(type='Normalize', mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_bgr=False),
+            dict(type='FormatShape', input_format='NCHW'),
+            dict(type='Collect', keys=['imgs', 'label'], meta_keys=[]),
+            dict(type='ToTensor', keys=['imgs'])
+        ])
+        self.frame_loader_augmented = Compose([
+            dict(type='DecordInit'),
+            dict(type='SampleFrames', clip_len=1, frame_interval=1, num_clips=self.num_frames),
+            dict(type='DecordDecode'),
+            dict(type='Resize', scale=(-1, scale_resize)),
+            dict(
+                type='MultiScaleCrop',
+                input_size=INPUT_SIZE,
+                scales=(1, 0.875, 0.75, 0.66),
+                random_crop=False,
+                max_wh_scale_gap=1),
+            dict(type='Resize', scale=(INPUT_SIZE, INPUT_SIZE), keep_ratio=False),
+            dict(type='Flip', flip_ratio=0.5),
+            dict(type='ColorJitter', p=COLOR_JITTER),
+            dict(type='GrayScale', p=GRAY_SCALE),
+            dict(type='Normalize', mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_bgr=False),
+            dict(type='FormatShape', input_format='NCHW'),
+            dict(type='Collect', keys=['imgs', 'label'], meta_keys=[]),
+            dict(type='ToTensor', keys=['imgs', 'label']),
         ])
         
         super().__init__(cache_file=os.path.join(FILE_DIR, CACHE_NAME), reset_cache=reset_cache)
@@ -172,25 +220,35 @@ class ViFiCLIP_SimilarityVLM(SimilarityVLM):
             input_word_embeds, attn_mask = self.get_input_word_embeddings([text])
             return self.text_encoder_from_word_embeddings(input_word_embeds, attn_mask)[0].cpu().numpy()
         
-    def load_video_frames(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_augment: bool = False) -> torch.Tensor:
-        decord.bridge.set_bridge("torch")
-        video_reader = decord.VideoReader(video_path, num_threads=1)
-        video_len = len(video_reader)
-        frame_indices = self.sample_frame_indices(video_len, subvideo_start_frame, subvideo_end_frame, random_augment)
-        frames = video_reader.get_batch(frame_indices)
-        frames = frames.float() / 255
-        frames = frames.permute(0, 3, 1, 2)
+    def load_video_frames(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_augment: bool = False) -> torch.Tensor:        
+        item_info = dict(
+            filename = video_path,
+            label = 0,
+            tar = False,
+            start_index = 0,
+            modality = "RGB"
+        )
+        if subvideo_start_frame is not None:
+            item_info["start_frame"] = subvideo_start_frame
+        if subvideo_end_frame is not None:
+            item_info["end_frame"] = subvideo_end_frame
         
-        # Preprocess
-        frames = torch.stack([
-            self.image_preprocessor(frame)
-            for frame in frames
-        ])
-        
-        decord.bridge.set_bridge("native")
+        if not random_augment:
+            item_info = self.frame_loader(item_info)
+        else:
+            item_info = self.frame_loader_augmented(item_info)
+        frames = item_info["imgs"]
         return frames
+        
     
     def video_encoder(self, video_path: str, subvideo_start_frame: Optional[int] = None, subvideo_end_frame: Optional[int] = None, random_augment: bool = False) -> np.ndarray:
+        # Correct for any subvideo start/end frame information included in video_path ("{path}:{start}:{end}")
+        video_path_split = video_path.split(":")
+        if len(video_path_split) == 3:
+            video_path = video_path_split[0]
+            subvideo_start_frame = int(video_path_split[1])
+            subvideo_end_frame = int(video_path_split[2])
+        
         frames = self.load_video_frames(video_path, subvideo_start_frame, subvideo_end_frame, random_augment).to(DEVICE)
         
         # Encode

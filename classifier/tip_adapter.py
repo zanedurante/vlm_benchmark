@@ -66,7 +66,7 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
                                             category names and support videos) for each query video path.
                                             Shape = (n_predict,).
     '''
-    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray,
+    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray, query_video_labels: np.ndarray,
                 val_tuning_video_paths: Optional[np.array] = None, val_tuning_video_labels: Optional[np.array] = None) -> np.ndarray:
         n_way = len(category_names)
         n_predict = query_video_paths.shape[0]
@@ -91,7 +91,8 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
         if n_support == 0:
             query_to_text_similarities = self.vlm.default_similarity_metric()(query_vid_embeds, text_embeds)
             query_predictions = np.argmax(query_to_text_similarities, axis=1)
-            return query_predictions
+            accuracy = (query_predictions == query_video_labels).mean()
+            return accuracy
         
         
         
@@ -196,15 +197,19 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
             
             
                     
-        query_embed_dataloader = torch.utils.data.DataLoader(query_vid_embeds, batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
-        query_predictions = []
+        query_embed_dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(query_vid_embeds, query_vid_labels), batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
+        query_correct = 0
+        query_total = 0
         with torch.no_grad():
-            for batch_idx, vid_embeds in enumerate(query_embed_dataloader):
+            for batch_idx, (vid_embeds, vid_labels) in enumerate(query_embed_dataloader):
                 vid_embeds = vid_embeds.to(DEVICE)
                 logits = adapter_module(vid_embeds)
-                query_predictions.append(logits.argmax(dim=1))
-            query_predictions = torch.cat(query_predictions, dim=0)
-        return query_predictions.cpu().numpy()
+                preds = logits.argmax(dim=1).cpu()
+                
+                query_correct += (preds == labels).sum().item()
+                query_total += len(preds)
+        accuracy = query_correct / query_total
+        return accuracy
         
                 
         

@@ -176,6 +176,13 @@ class ClipVLM(SimilarityVLM):
         :param subvideo_end_frame:
         :return:
         """
+        # Correct for any subvideo start/end frame information included in video_path ("{path}:{start}:{end}")
+        video_path_split = video_path.split(":")
+        if len(video_path_split) == 3:
+            video_path = video_path_split[0]
+            subvideo_start_frame = int(video_path_split[1])
+            subvideo_end_frame = int(video_path_split[2])
+            
         # Load
         # TODO: Figure out best way to subsample the video with CLIP (in the paper they just use one single frame)
         video_reader = decord.VideoReader(video_path, num_threads=1)

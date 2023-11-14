@@ -161,8 +161,9 @@ class Accumulator:
 
 
 
-class VLPromptFewShotClassifier(FewShotClassifier):
+class VLPromptNameTuningFewShotClassifier(FewShotClassifier):
     def __init__(self, vlm: SimilarityVLM,
+                 name_regularization: float = 1.0,
                  text_context_len: int = 10,
                  text_context_depth: int = 12,
                  vision_context_len: int = 10,
@@ -178,6 +179,7 @@ class VLPromptFewShotClassifier(FewShotClassifier):
         assert optimizer in ["sgd", "adam", "adamw"], "Invalid optimizer choice."
         self.vlm = vlm
         
+        self.name_regularization = float(name_regularization)
         self.text_context_len = int(text_context_len)
         self.text_context_depth = int(text_context_depth)
         self.vision_context_len = int(vision_context_len)
@@ -200,6 +202,7 @@ class VLPromptFewShotClassifier(FewShotClassifier):
     '''
     def params(self) -> dict:
         return {
+            "name_regularization": self.name_regularization,
             "text_context_len": self.text_context_len,
             "text_context_depth": self.text_context_depth,
             "vision_context_len": self.vision_context_len,
@@ -267,7 +270,7 @@ class VLPromptFewShotClassifier(FewShotClassifier):
             labels=torch.repeat_interleave(torch.arange(n_way), n_support).tolist(),
             num_frames=self.vlm.num_frames,
             eval_mode=False
-        )        
+        )
         if torch.distributed.is_initialized():
             train_sampler = torch.utils.data.DistributedSampler(
                 train_data,
@@ -443,6 +446,10 @@ class VLPromptFewShotClassifier(FewShotClassifier):
                     logits = module(vid_frames)
                     loss = criterion(logits, vid_labels)
                     
+                    # Add name regularization term
+                    reg_loss = 0.5 * self.name_regularization * module.name_perturbation.pow(2).sum()
+                    loss = loss + reg_loss
+                    
                     # Scale down loss for accumulation steps
                     # Number of accumulation steps may be smaller for final batches (if not divisible by self.accumulation_steps)
                     if batch_idx >= len(train_dataloader) - accumulation_remainder_batches:
@@ -564,6 +571,19 @@ class VLPrompt_Module(nn.Module):
         eot_token_inds = category_name_tokens.argmax(dim=-1)
         self.register_buffer("eot_token_inds", eot_token_inds)
         
+        
+        # Create name perturbation parameter (seq_len, categories, dim)
+        name_perturbation = torch.zeros_like(pre_transformer_text_embeds)
+        self.name_perturbation = nn.Parameter(name_perturbation)
+        
+        # Create name perturbation mask as buffer 
+        name_token_inds = torch.arange(category_name_tokens.size(1), device=DEVICE)[None, :]
+        name_token_mask = (name_token_inds >= 1 + text_context_len) & (name_token_inds < eot_token_inds[:, None])
+        name_perturbation_mask = name_token_mask.transpose(0, 1) # (categories, seq_len) -> (seq_len, categories)
+        self.register_buffer("name_perturbation_mask", name_perturbation_mask)
+        
+        
+        
         # Create text context parameter
         if text_context_depth > 0:
             text_context = torch.empty(text_context_depth, text_context_len, self.vlm.model.token_embedding.embedding_dim, dtype=self.vlm.model.dtype)
@@ -586,6 +606,10 @@ class VLPrompt_Module(nn.Module):
     # Compute the text branch for all category names
     def tuned_text_embeds(self):
         x = self.pre_transformer_text_embeds # Shape = (seq_len, categories, dim)
+        
+        # Add name perturbation
+        x = x + self.name_perturbation * self.name_perturbation_mask[:, :, None]
+        
         for i, resblock in enumerate(self.vlm.model.transformer.resblocks):
             if self.text_context is not None and i < len(self.text_context):
                 context = self.text_context[i].unsqueeze(1).expand(-1, x.size(1), -1).type(x.dtype)

@@ -1768,8 +1768,10 @@ class DecordInit:
 
     Decord: https://github.com/dmlc/decord
 
-    Required keys are "filename",
+    Required keys are "filename".
+    Optional keys are "start_frame", "end_frame".
     added or modified keys are "video_reader" and "total_frames".
+    "start_frame", "end_frame" keys are added if not already present.
     """
 
     def __init__(self, io_backend='disk', num_threads=1, **kwargs):
@@ -1805,7 +1807,20 @@ class DecordInit:
             file_obj = io.BytesIO(iob)
         container = decord.VideoReader(file_obj, num_threads=self.num_threads)
         results['video_reader'] = container
-        results['total_frames'] = len(container)
+        
+        # Compute total_frames, adjusted by any frame start/end info included
+        video_len = len(container)
+        if "end_frame" in results:
+            assert results["end_frame"] <= video_len
+            video_len = results["end_frame"]
+        else:
+            results["end_frame"] = video_len
+        if "start_frame" in results:
+            assert results["start_frame"] >= 0 and results["start_frame"] < video_len
+            video_len = video_len - results["start_frame"]
+        else:
+            results["start_frame"] = 0
+        results['total_frames'] = video_len
         return results
 
     def __repr__(self):
@@ -1858,8 +1873,8 @@ class DecordDecode:
 class SampleFrames:
     """Sample frames from the video.
 
-    Required keys are "total_frames", "start_index" , added or modified keys
-    are "frame_inds", "frame_interval" and "num_clips".
+    Required keys are "total_frames", "start_index", "start_frame", "end_frame".
+    Added or modified keys are "frame_inds", "frame_interval" and "num_clips".
 
     Args:
         clip_len (int): Frames of each sampled output clip.
@@ -2044,7 +2059,7 @@ class SampleFrames:
             start_index = results['start_index']
             frame_inds = np.concatenate(frame_inds) + start_index
 
-        results['frame_inds'] = frame_inds.astype(int)
+        results['frame_inds'] = frame_inds.astype(int) + results["start_frame"]
         results['clip_len'] = self.clip_len
         results['frame_interval'] = self.frame_interval
         results['num_clips'] = self.num_clips

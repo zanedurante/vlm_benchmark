@@ -259,6 +259,13 @@ class VideoClipVLM(SimilarityVLM):
         :param subvideo_end_frame:
         :return:
         """
+        # Correct for any subvideo start/end frame information included in video_path ("{path}:{start}:{end}")
+        video_path_split = video_path.split(":")
+        if len(video_path_split) == 3:
+            video_path = video_path_split[0]
+            subvideo_start_frame = int(video_path_split[1])
+            subvideo_end_frame = int(video_path_split[2])
+            
         video = self.open_video(video_path, subvideo_start_frame, subvideo_end_frame, random_augment)
         video = self.transform(video, random_augment)
         

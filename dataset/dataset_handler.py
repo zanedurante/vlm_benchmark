@@ -22,12 +22,13 @@ TODO: Remove moma repo as submodule, instead add instructions to clone it (anywh
 FILE_DIR = os.path.dirname(os.path.realpath(__file__))
 MOMA_REPO = os.path.join(FILE_DIR, "moma")
 
-KINETICS_100_DIR = "D:\\datasets\\PAC\\few_shot_act_reg\\kinetics_100"
-SMSM_DIR = "/home/datasets/smsm_cmn"
-MOMA_DIR = "/home/datasets/moma"
-HMDB_51_DIR = "D:\\datasets\\PAC\\few_shot_act_reg\\hmdb_51"
-UCF_101_DIR = "D:\\datasets\\PAC\\few_shot_act_reg\\ucf_101"
-SSV2_DIR = "D:\\datasets\\PAC\\few_shot_act_reg\\ssv2"
+KINETICS_100_DIR = None
+SMSM_DIR = None
+MOMA_DIR = None
+HMDB_51_DIR = "/next/u/rharries/vlm_benchmark.data/hmdb_51"
+UCF_101_DIR = "/next/u/rharries/vlm_benchmark.data/ucf_101"
+SSV2_DIR = "/next/u/rharries/vlm_benchmark.data/ssv2"
+IADL_DIR = "/next/u/rharries/vlm_benchmark.data/InteractADL_egoview_actions"
 
 
 DEFAULT_MIN_TRAIN_VIDS = 16
@@ -285,7 +286,9 @@ class DatasetHandler:
                             video_file = line[1]
                             train_val_paths_per_category[category_dir].append(f"{category_dir}/{video_file}")
                     for category_dir, paths in train_val_paths_per_category.items():
-                        train, val = torch.utils.data.random_split(paths, [0.75, 0.25], generator=train_val_split_generator)
+                        train_len = int(0.75 * len(paths))
+                        val_len = len(paths) - train_len
+                        train, val = torch.utils.data.random_split(paths, [train_len, val_len], generator=train_val_split_generator)
                         train_paths[split_number] += train
                         val_paths[split_number] += val
                     
@@ -368,39 +371,25 @@ class DatasetHandler:
                         self.data_dict[category_name].append(video_path)
                 elif split == "all":
                     raise NotImplementedError
-                        
-                        
-                        
-                """
-                if split == "train":
-                    with open(os.path.join(SSV2_DIR, "labels", "train.json"), "r") as fp:
-                        label_info = json.load(fp)
-                    for vid_info in label_info:
-                        category_name = vid_info["template"].replace("[something]", "something").lower()
-                        video_path = os.path.join(SSV2_DIR, "20bn-something-something-v2", f"{vid_info['id']}.webm")
-                        self.data_dict[category_name].append(video_path)
-                elif split == "val":
-                    with open(os.path.join(SSV2_DIR, "labels", "validation.json"), "r") as fp:
-                        label_info = json.load(fp)
-                    for vid_info in label_info:
-                        category_name = vid_info["template"].replace("[something]", "something").lower()
-                        video_path = os.path.join(SSV2_DIR, "20bn-something-something-v2", f"{vid_info['id']}.webm")
-                        self.data_dict[category_name].append(video_path)
-                elif split == "test":
-                    # Test labels are in a csv format rather than json
-                    with open(os.path.join(SSV2_DIR, "labels", "test-answers.csv"), "r") as fp:
-                        for line in fp.readlines():
-                            line = line.strip().split(";")
-                            category_name = line[1].lower()
-                            video_path = os.path.join(SSV2_DIR, "20bn-something-something-v2", f"{line[0]}.webm")
-                            self.data_dict[category_name].append(video_path)
-                elif split == "all":
-                    raise NotImplementedError
-                """
                 
             elif split_type == "class":
                 raise NotImplementedError
         
+        elif name == "iadl":
+            if split_type == "video":
+                if split in ["train", "val", "test"]:
+                    with open(os.path.join(IADL_DIR, "splits", f"{split}.json"), "r") as fp:
+                        self.data_dict = json.load(fp)
+                elif split == "all":
+                    raise NotImplementedError
+                        
+                # Prepend base data dir to relative video paths
+                for category, vids in self.data_dict.items():
+                    for i in range(len(vids)):
+                        vids[i] = os.path.join(IADL_DIR, vids[i])
+                
+            elif split_type == "class":
+                raise NotImplementedError
         
         else:
             raise ValueError(f"Unrecognized dataset name: {name}")

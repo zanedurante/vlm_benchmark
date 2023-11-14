@@ -19,9 +19,10 @@ argparser.add_argument("vlm", choices=["clip", "miles", "videoclip", "vifi"],
                        help="VLM to run. Requires corresponding conda environment")
 argparser.add_argument("classifier", choices=["vl_proto", "hard_prompt_vl_proto", "nearest_neighbor", "gaussian_proto",
                                               "linear", "subvideo", "tip_adapter", "coop", "cona", "cona_adapter",
-                                              "cona_prompt_init", "name_tuning", "name_tuning_adapter", "coop_adapter"],
+                                              "cona_prompt_init", "name_tuning", "name_tuning_adapter", "coop_adapter",
+                                              "vl_prompt", "vl_prompt_name_tuning"],
                        help="Classifier to run")
-argparser.add_argument("-d", "--dataset", nargs="+", default=["smsm", "moma_sact", "kinetics_100", "moma_act", "hmdb_51", "ucf_101", "ssv2"],
+argparser.add_argument("-d", "--dataset", nargs="+", default=["smsm", "moma_sact", "kinetics_100", "moma_act", "hmdb_51", "ucf_101", "ssv2", "iadl"],
                        help="Which dataset name to run on")
 argparser.add_argument("-s", "--n_shots", nargs="+", type=int, default=[1,2,4,8,16],
                        help="Number of shots to run on")
@@ -85,8 +86,11 @@ VLM Setup
 fixed_vlm_kwargs = {} # VLM keyword parameters to pass to constructor
 vlm_hyperparams = [] # Hyperparameter spaces in skopt format
 if args.vlm == "clip":
-    from CLIP.CLIPVLM import ClipVLM as VLM
-    fixed_vlm_kwargs["num_frames"] = 10
+    #from CLIP.CLIPVLM import ClipVLM as VLM
+    #fixed_vlm_kwargs["num_frames"] = 10
+    from VIFI_CLIP.wrapper import ViFiCLIP_SimilarityVLM as VLM
+    fixed_vlm_kwargs["num_frames"] = 32
+    fixed_vlm_kwargs["load_vifi"] = False
 elif args.vlm == "miles":
     from MILES.wrapper import MILES_SimilarityVLM as VLM
 elif args.vlm == "videoclip":
@@ -310,6 +314,21 @@ elif args.classifier == "coop_adapter":
     fixed_classifier_kwargs["adapter_lr_multiplier"] = 1e-1
     fixed_classifier_kwargs["adapter_regularization"] = 1e-2
     
+elif args.classifier == "vl_prompt":
+    from classifier.vl_prompt import VLPromptFewShotClassifier as Classifier
+    fixed_classifier_kwargs["batch_size"] = 2
+    fixed_classifier_kwargs["accumulation_steps"] = 4
+    
+elif args.classifier == "vl_prompt_name_tuning":
+    from classifier.vl_prompt_name_tuning import VLPromptNameTuningFewShotClassifier as Classifier
+    fixed_classifier_kwargs["batch_size"] = 2
+    fixed_classifier_kwargs["accumulation_steps"] = 4
+    
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [0.1, 1, 10],
+        name="name_regularization"
+    ))
+    
 else:
     raise ValueError("Unrecognized classifier arg")
 
@@ -356,7 +375,7 @@ for key, val_list in unknown_args.items():
 Set up results folder
 '''
 if args.folder is None:
-    RESULTS_FOLDER = os.path.join("hyperparam_search", Classifier.__name__, VLM.__name__)
+    RESULTS_FOLDER = os.path.join("hyperparam_search", args.classifier, args.vlm)
 else:
     RESULTS_FOLDER = args.folder
 os.makedirs(RESULTS_FOLDER, exist_ok=True)
@@ -483,34 +502,135 @@ for test_params in pbar:
     
     
     '''
-    Run hyperparameter search for current test params
+    Run hyperparameter search for current test params.
+    SKIP if there are no hyperparameter spaces defined for the current setup
     '''
-    if args.method in ["gp", "forest"]:
+    if len(hyperparam_space) > 0:
+        if args.method in ["gp", "forest"]:
+            '''
+            Find any previous val runs which shall be fed into skopt hyperparam search alg
+            Possible since hyperparameter spaces are named to match names in results csvs, which cover all vlm and classifier parameters
+            Only used for skopt search methods
+            '''
+            prev_val_run_results = filter_test_results(
+                val_run_handler.results,
+                dict(
+                    test_kwargs,
+                    query_dataset=query_dataset_val.id(),
+                    support_dataset=support_dataset_val.id(),
+                    val_tuning_dataset=val_tuning_dataset.id() if val_tuning_dataset is not None else None,
+                    vlm_class=VLM.__name__,
+                    **{f"vlm.{key}": val for key, val in fixed_vlm_kwargs.items()},
+                    classifier_class=Classifier.__name__,
+                    **{f"classifier.{key}": val for key, val in fixed_classifier_kwargs.items()}
+                )
+            ).reset_index(drop=True)
+            if len(prev_val_run_results):
+                x0, y0 = [], []
+                for i in range(len(prev_val_run_results)):
+                    # Discard points outside of the current hyperparam space bounds
+                    in_bounds = True
+                    for hyper in hyperparam_space:
+                        val = prev_val_run_results.loc[i, hyper.name]
+                        if isinstance(hyper, skopt.space.space.Categorical):
+                            if val not in hyper.categories:
+                                in_bounds = False
+                                break
+                        else:
+                            if val < hyper.low or val > hyper.high:
+                                in_bounds = False
+                                break
+                    if in_bounds:
+                        x0.append(tuple(prev_val_run_results.loc[i, hyper.name] for hyper in hyperparam_space))
+                        y0.append(-1 * prev_val_run_results.loc[i, "accuracy"])
+            else:
+                x0, y0 = None, None
+
+            if args.method == "gp":
+                skopt_func = skopt.gp_minimize
+            elif args.method == "forest":
+                skopt_func = skopt.forest_minimize
+            else:
+                raise NotImplementedError
+
+            hyper_search_pbar = tqdm(total=args.n_search_runs)
+            skopt_results = skopt_func(val_neg_accuracy, hyperparam_space, n_calls=args.n_search_runs, callback=skopt_callback, x0=x0, y0=y0)
+        elif args.method == "random":
+            hyper_search_pbar = tqdm(total=args.n_search_runs)
+            for _ in range(args.n_search_runs):
+                val_neg_accuracy([hyper.rvs(1)[0] for hyper in hyperparam_space])
+                hyper_search_pbar.update(1)
+        elif args.method == "grid":
+            '''
+            If doing grid search, convert categorical and continues hyperparam spaces into an evenly spaced grid of samples
+            '''
+            categorical_hyperparams = [hyper for hyper in hyperparam_space if type(hyper) is skopt.space.space.Categorical]
+            other_hyperparams = [hyper for hyper in hyperparam_space if type(hyper) is not skopt.space.space.Categorical]
+
+            # Grid must iterate over all selected categories
+            runs_per_category_choice = args.n_search_runs
+            for hyper in categorical_hyperparams:
+                runs_per_category_choice = runs_per_category_choice // len(hyper.categories)
+
+            if runs_per_category_choice == 0:
+                raise ValueError(f"Too many categorical hyperparameters to iterate over all choices without exceeding {args.n_search_runs} runs.")
+
+            if len(other_hyperparams) == 0:
+                discretized_hyperparam_space = [hyper.categories for hyper in hyperparam_space]
+            else:
+                samples_per_cont_hyper = int(np.power(runs_per_category_choice, 1 / len(other_hyperparams)))
+
+                if samples_per_cont_hyper == 0:
+                    raise ValueError(f"Too many hyperparameters to iterate over all categories and still choose multiple values per continuous space, without exceeding {args.n_search_runs} runs.")
+
+                discretized_hyperparam_space = []
+                for hyper in hyperparam_space:
+                    if type(hyper) is skopt.space.space.Categorical:
+                        discretized_hyperparam_space.append(hyper.categories)
+                    elif type(hyper) in [skopt.space.space.Real, skopt.space.space.Integer]:
+                        if hyper.prior == "log-uniform":
+                            hyper_samples = np.logspace(np.log10(hyper.low), np.log10(hyper.high), num=samples_per_cont_hyper, endpoint=True)
+                        else:
+                            hyper_samples = np.linspace(hyper.low, hyper.high, num=samples_per_cont_hyper, endpoint=True)
+
+                        if type(hyper) is skopt.space.space.Integer:
+                            hyper_samples = np.round(hyper_samples)
+
+                        discretized_hyperparam_space.append(hyper_samples)
+                    else:
+                        raise NotImplementedError
+
+            hyperparam_value_iter = list(itertools.product(*discretized_hyperparam_space))
+            hyper_search_pbar = tqdm(total=len(hyperparam_value_iter))
+            for i, hyperparam_values in enumerate(hyperparam_value_iter):
+                val_neg_accuracy(hyperparam_values)
+                hyper_search_pbar.update(1)
+        else:
+            raise NotImplementedError
+
         '''
-        Find any previous val runs which shall be fed into skopt hyperparam search alg
-        Possible since hyperparameter spaces are named to match names in results csvs, which cover all vlm and classifier parameters
-        Only used for skopt search methods
+        Save skopt dependence plots if not grid search
         '''
-        prev_val_run_results = filter_test_results(
-            val_run_handler.results,
-            dict(
-                test_kwargs,
-                query_dataset=query_dataset_val.id(),
-                support_dataset=support_dataset_val.id(),
-                val_tuning_dataset=val_tuning_dataset.id() if val_tuning_dataset is not None else None,
-                vlm_class=VLM.__name__,
-                **{f"vlm.{key}": val for key, val in fixed_vlm_kwargs.items()},
-                classifier_class=Classifier.__name__,
-                **{f"classifier.{key}": val for key, val in fixed_classifier_kwargs.items()}
-            )
-        ).reset_index(drop=True)
-        if len(prev_val_run_results):
+        if args.method != "grid":
+            completed_val_run_results = filter_test_results(
+                val_run_handler.results,
+                dict(
+                    test_kwargs,
+                    query_dataset=query_dataset_val.id(),
+                    support_dataset=support_dataset_val.id(),
+                    val_tuning_dataset=val_tuning_dataset.id() if val_tuning_dataset is not None else None,
+                    vlm_class=VLM.__name__,
+                    **{f"vlm.{key}": val for key, val in fixed_vlm_kwargs.items()},
+                    classifier_class=Classifier.__name__,
+                    **{f"classifier.{key}": val for key, val in fixed_classifier_kwargs.items()}
+                )
+            ).reset_index(drop=True)
             x0, y0 = [], []
-            for i in range(len(prev_val_run_results)):
+            for i in range(len(completed_val_run_results)):
                 # Discard points outside of the current hyperparam space bounds
                 in_bounds = True
                 for hyper in hyperparam_space:
-                    val = prev_val_run_results.loc[i, hyper.name]
+                    val = completed_val_run_results.loc[i, hyper.name]
                     if isinstance(hyper, skopt.space.space.Categorical):
                         if val not in hyper.categories:
                             in_bounds = False
@@ -520,79 +640,34 @@ for test_params in pbar:
                             in_bounds = False
                             break
                 if in_bounds:
-                    x0.append(tuple(prev_val_run_results.loc[i, hyper.name] for hyper in hyperparam_space))
-                    y0.append(-1 * prev_val_run_results.loc[i, "accuracy"])
-        else:
-            x0, y0 = None, None
-        
-        if args.method == "gp":
-            skopt_func = skopt.gp_minimize
-        elif args.method == "forest":
-            skopt_func = skopt.forest_minimize
-        else:
-            raise NotImplementedError
-        
-        hyper_search_pbar = tqdm(total=args.n_search_runs)
-        skopt_results = skopt_func(val_neg_accuracy, hyperparam_space, n_calls=args.n_search_runs, callback=skopt_callback, x0=x0, y0=y0)
-    elif args.method == "random":
-        hyper_search_pbar = tqdm(total=args.n_search_runs)
-        for _ in range(args.n_search_runs):
-            val_neg_accuracy([hyper.rvs(1)[0] for hyper in hyperparam_space])
-            hyper_search_pbar.update(1)
-    elif args.method == "grid":
-        '''
-        If doing grid search, convert categorical and continues hyperparam spaces into an evenly spaced grid of samples
-        '''
-        categorical_hyperparams = [hyper for hyper in hyperparam_space if type(hyper) is skopt.space.space.Categorical]
-        other_hyperparams = [hyper for hyper in hyperparam_space if type(hyper) is not skopt.space.space.Categorical]
-        
-        # Grid must iterate over all selected categories
-        runs_per_category_choice = args.n_search_runs
-        for hyper in categorical_hyperparams:
-            runs_per_category_choice = runs_per_category_choice // len(hyper.categories)
-        
-        if runs_per_category_choice == 0:
-            raise ValueError(f"Too many categorical hyperparameters to iterate over all choices without exceeding {args.n_search_runs} runs.")
-        
-        if len(other_hyperparams) == 0:
-            discretized_hyperparam_space = [hyper.categories for hyper in hyperparam_space]
-        else:
-            samples_per_cont_hyper = int(np.power(runs_per_category_choice, 1 / len(other_hyperparams)))
-            
-            if samples_per_cont_hyper == 0:
-                raise ValueError(f"Too many hyperparameters to iterate over all categories and still choose multiple values per continuous space, without exceeding {args.n_search_runs} runs.")
-            
-            discretized_hyperparam_space = []
-            for hyper in hyperparam_space:
-                if type(hyper) is skopt.space.space.Categorical:
-                    discretized_hyperparam_space.append(hyper.categories)
-                elif type(hyper) in [skopt.space.space.Real, skopt.space.space.Integer]:
-                    if hyper.prior == "log-uniform":
-                        hyper_samples = np.logspace(np.log10(hyper.low), np.log10(hyper.high), num=samples_per_cont_hyper, endpoint=True)
-                    else:
-                        hyper_samples = np.linspace(hyper.low, hyper.high, num=samples_per_cont_hyper, endpoint=True)
-                    
-                    if type(hyper) is skopt.space.space.Integer:
-                        hyper_samples = np.round(hyper_samples)
-                        
-                    discretized_hyperparam_space.append(hyper_samples)
-                else:
-                    raise NotImplementedError
-            
-        hyperparam_value_iter = list(itertools.product(*discretized_hyperparam_space))
-        hyper_search_pbar = tqdm(total=len(hyperparam_value_iter))
-        for i, hyperparam_values in enumerate(hyperparam_value_iter):
-            val_neg_accuracy(hyperparam_values)
-            hyper_search_pbar.update(1)
-    else:
-        raise NotImplementedError
+                    x0.append(tuple(completed_val_run_results.loc[i, hyper.name] for hyper in hyperparam_space))
+                    y0.append(-1 * completed_val_run_results.loc[i, "accuracy"])
+            dummy_results = skopt.gp_minimize(val_neg_accuracy, hyperparam_space, n_calls=0, n_initial_points=0, x0=x0, y0=y0)
+            ax = skopt.plots.plot_objective(dummy_results, levels=100)
+            if isinstance(ax, np.ndarray):
+                fig = ax[0,0].get_figure()
+            else:
+                fig = ax.get_figure()
+            fig.savefig(
+                os.path.join(RESULTS_FOLDER, ".".join([query_dataset_val.id()] + [f"{key}_{val}" for key, val in test_kwargs.items()] + ["jpg"])),
+                facecolor="white", bbox_inches="tight"
+            )
+    
     
     '''
-    Save skopt dependence plots if not grid search
+    Collect best hyperparam values from val results
     '''
-    if args.method != "grid":
-        completed_val_run_results = filter_test_results(
+    vlm_kwargs = {}
+    classifier_kwargs = {}
+    
+    if len(hyperparam_space) > 0:
+        # Select best hyperparameter values from val split
+        best_hyperparam_values = find_hyperparameters(
             val_run_handler.results,
+            hyperparam_cols=[col for col in val_run_handler.results if col.startswith("classifier.") or col.startswith("vlm.")]
+        )
+        matching_hyperparam_values = filter_test_results(
+            best_hyperparam_values,
             dict(
                 test_kwargs,
                 query_dataset=query_dataset_val.id(),
@@ -604,89 +679,42 @@ for test_params in pbar:
                 **{f"classifier.{key}": val for key, val in fixed_classifier_kwargs.items()}
             )
         ).reset_index(drop=True)
-        x0, y0 = [], []
-        for i in range(len(completed_val_run_results)):
-            # Discard points outside of the current hyperparam space bounds
-            in_bounds = True
-            for hyper in hyperparam_space:
-                val = completed_val_run_results.loc[i, hyper.name]
-                if isinstance(hyper, skopt.space.space.Categorical):
-                    if val not in hyper.categories:
-                        in_bounds = False
-                        break
-                else:
-                    if val < hyper.low or val > hyper.high:
-                        in_bounds = False
-                        break
-            if in_bounds:
-                x0.append(tuple(completed_val_run_results.loc[i, hyper.name] for hyper in hyperparam_space))
-                y0.append(-1 * completed_val_run_results.loc[i, "accuracy"])
-        dummy_results = skopt.gp_minimize(val_neg_accuracy, hyperparam_space, n_calls=0, n_initial_points=0, x0=x0, y0=y0)
-        ax = skopt.plots.plot_objective(dummy_results, levels=100)
-        if isinstance(ax, np.ndarray):
-            fig = ax[0,0].get_figure()
-        else:
-            fig = ax.get_figure()
-        fig.savefig(
-            os.path.join(RESULTS_FOLDER, ".".join([query_dataset_val.id()] + [f"{key}_{val}" for key, val in test_kwargs.items()] + ["jpg"])),
-            facecolor="white", bbox_inches="tight"
-        )
-    
-    
-    '''
-    Test run with best hyperparams
-    '''
-    # Select best hyperparameter values from val split
-    best_hyperparam_values = find_hyperparameters(
-        val_run_handler.results,
-        hyperparam_cols=[col for col in val_run_handler.results if col.startswith("classifier.") or col.startswith("vlm.")]
-    )
-    matching_hyperparam_values = filter_test_results(
-        best_hyperparam_values,
-        dict(
-            test_kwargs,
-            query_dataset=query_dataset_val.id(),
-            support_dataset=support_dataset_val.id(),
-            val_tuning_dataset=val_tuning_dataset.id() if val_tuning_dataset is not None else None,
-            vlm_class=VLM.__name__,
-            **{f"vlm.{key}": val for key, val in fixed_vlm_kwargs.items()},
-            classifier_class=Classifier.__name__,
-            **{f"classifier.{key}": val for key, val in fixed_classifier_kwargs.items()}
-        )
-    ).reset_index(drop=True)
-    
-    vlm_kwargs = {}
-    classifier_kwargs = {}
-    for col in matching_hyperparam_values.columns:
-        # Skip vlm/classifier args that aren't in hyperparam space
-        if col not in [hyper.name for hyper in hyperparam_space]:
-            continue
-        
-        if col.startswith("vlm."):
-            if col[4:] in fixed_vlm_kwargs.keys():
+
+
+        for col in matching_hyperparam_values.columns:
+            # Skip vlm/classifier args that aren't in hyperparam space
+            if col not in [hyper.name for hyper in hyperparam_space]:
                 continue
-            val = matching_hyperparam_values.loc[0, col]
-            # NaN values indicate they aren't applicable for this vlm/classifier
-            if not pd.isna(val):
-                # Replace np types with native python types
-                if type(val).__module__ == np.__name__:
-                    val = val.item()
-                vlm_kwargs[col[4:]] = val
-                
-        if col.startswith("classifier."):
-            if col[11:] in fixed_classifier_kwargs.keys():
-                continue
-            val = matching_hyperparam_values.loc[0, col]
-            # NaN values indicate they aren't applicable for this vlm/classifier
-            if not pd.isna(val):
-                # Replace np types with native python types
-                if type(val).__module__ == np.__name__:
-                    val = val.item()
-                if col == "classifier.metric":
-                    classifier_kwargs[col[11:]] = Similarity[val]
-                else:
-                    classifier_kwargs[col[11:]] = val
-                
+
+            if col.startswith("vlm."):
+                if col[4:] in fixed_vlm_kwargs.keys():
+                    continue
+                val = matching_hyperparam_values.loc[0, col]
+                # NaN values indicate they aren't applicable for this vlm/classifier
+                if not pd.isna(val):
+                    # Replace np types with native python types
+                    if type(val).__module__ == np.__name__:
+                        val = val.item()
+                    vlm_kwargs[col[4:]] = val
+
+            if col.startswith("classifier."):
+                if col[11:] in fixed_classifier_kwargs.keys():
+                    continue
+                val = matching_hyperparam_values.loc[0, col]
+                # NaN values indicate they aren't applicable for this vlm/classifier
+                if not pd.isna(val):
+                    # Replace np types with native python types
+                    if type(val).__module__ == np.__name__:
+                        val = val.item()
+                    if col == "classifier.metric":
+                        classifier_kwargs[col[11:]] = Similarity[val]
+                    else:
+                        classifier_kwargs[col[11:]] = val
+     
+    '''
+    Run on test set with best hyperparameters
+    '''
+    
     # Update vlm if necessary (allow reuse if unchanging)
     if vlm is None or cur_vlm_kwargs != vlm_kwargs:
         vlm = VLM(**fixed_vlm_kwargs, **vlm_kwargs)

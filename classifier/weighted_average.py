@@ -58,7 +58,7 @@ class WeightedTextFewShotClassifier(FewShotClassifier):
                                             category names and support videos) for each query video path.
                                             Shape = (n_predict,).
     '''
-    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray,
+    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray, query_video_labels: np.ndarray,
                 val_tuning_video_paths: Optional[np.array] = None, val_tuning_video_labels: Optional[np.array] = None) -> np.ndarray:
         n_way = category_names.shape[0]
         n_predict = query_video_paths.shape[0]
@@ -96,9 +96,13 @@ class WeightedTextFewShotClassifier(FewShotClassifier):
         prototype_embeds = np.average(support_embeds, axis=1, weights=support_embed_weights)
         
         # Compare query similarity to prototypes
-        query_to_proto_similarities = self.metric(query_embeds, prototype_embeds)
+        QUERY_BATCH_SIZE = 2048
+        query_category_index_predictions = []
+        for query_batch_start_ind in range(0, len(query_embeds), QUERY_BATCH_SIZE):
+            query_batch_embeds = query_embeds[query_batch_start_ind : min(query_batch_start_ind + QUERY_BATCH_SIZE, len(query_embeds))]
+            query_batch_to_proto_similarities = self.metric(query_batch_embeds, prototype_embeds)
+            query_category_index_predictions.append(np.argmax(query_batch_to_proto_similarities, axis=1))
+        query_category_index_predictions = np.concatenate(query_category_index_predictions, axis=0)
         
-        # Choose category index with max similarity for each query
-        query_category_index_predictions = np.argmax(query_to_proto_similarities, axis=1)
-        
-        return query_category_index_predictions
+        accuracy = (query_category_index_predictions == query_video_labels).mean()
+        return accuracy
