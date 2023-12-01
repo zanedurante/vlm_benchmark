@@ -197,7 +197,7 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
             
             
                     
-        query_embed_dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(query_vid_embeds, query_vid_labels), batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
+        query_embed_dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(query_vid_embeds, torch.from_numpy(query_video_labels)), batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
         query_correct = 0
         query_total = 0
         with torch.no_grad():
@@ -206,7 +206,7 @@ class TipAdapterFewShotClassifier(FewShotClassifier):
                 logits = adapter_module(vid_embeds)
                 preds = logits.argmax(dim=1).cpu()
                 
-                query_correct += (preds == labels).sum().item()
+                query_correct += (preds == vid_labels).sum().item()
                 query_total += len(preds)
         accuracy = query_correct / query_total
         return accuracy

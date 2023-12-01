@@ -13,6 +13,7 @@ from .base import FewShotClassifier
 from .prompt_ensembles import PROMPT_ENSEMBLES
 
 QUERY_BATCH_SIZE = 2048 # Batch size used for iterating through non-training data
+MAX_QUERY_SAMPLES_PER_EPOCH = 2048 # Number of random samples to draw from val dataset if using val tuning
 
 '''
 Name-tuning and prompt-ensembling only
@@ -235,6 +236,9 @@ class NameTuningFewShotClassifier(FewShotClassifier):
                         logits = module(vid_embeds)
                     total_val_correct += (logits.argmax(dim=1) == vid_labels).sum()
                     total_val_count += len(vid_paths)
+
+                    if (batch_idx + 1) * QUERY_BATCH_SIZE >= MAX_QUERY_SAMPLES_PER_EPOCH:
+                        break
                     
                 val_acc = total_val_correct / total_val_count
                 if val_tuning_best_acc is None or val_acc >= val_tuning_best_acc:
@@ -260,7 +264,7 @@ class NameTuningFewShotClassifier(FewShotClassifier):
         with torch.no_grad():
             self.tuned_input_embeds = module.tuned_class_input_word_embeds(0)
                 
-        query_dataloader = torch.utils.data.DataLoader(zip(query_video_paths, query_video_labels), batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
+        query_dataloader = torch.utils.data.DataLoader(list(zip(query_video_paths, query_video_labels)), batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
         query_correct = 0
         query_total = 0
         with torch.no_grad():

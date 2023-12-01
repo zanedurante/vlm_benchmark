@@ -1811,12 +1811,12 @@ class DecordInit:
         # Compute total_frames, adjusted by any frame start/end info included
         video_len = len(container)
         if "end_frame" in results:
-            assert results["end_frame"] <= video_len
-            video_len = results["end_frame"]
+            assert results["end_frame"] < video_len, f"{results['end_frame']} < {video_len}"
+            video_len = results["end_frame"] + 1
         else:
             results["end_frame"] = video_len
         if "start_frame" in results:
-            assert results["start_frame"] >= 0 and results["start_frame"] < video_len
+            assert results["start_frame"] >= 0 and results["start_frame"] < video_len, f"{results['start_frame']} < {video_len}"
             video_len = video_len - results["start_frame"]
         else:
             results["start_frame"] = 0

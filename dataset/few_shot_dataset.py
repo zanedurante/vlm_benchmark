@@ -1,5 +1,5 @@
 import itertools
-from typing import Optional
+from typing import Optional, List
 import numpy as np
 import contextlib
 import torch
@@ -43,16 +43,7 @@ class FewShotTaskDataset(torch.utils.data.IterableDataset):
         
         self.same_dataset = (query_dataset.id() == support_dataset.id())
         
-        if self.same_dataset:
-            min_category_vids = n_support + (n_query or 1)
-            self.category_names = [name for name, vids in query_dataset.data_dict.items() if len(vids) >= min_category_vids]
-        else:
-            min_query_vids = n_query or 1
-            min_support_vids = n_support
-            self.category_names = [
-                name for name in query_dataset.data_dict
-                if name in support_dataset.data_dict and len(query_dataset.data_dict[name]) >= min_query_vids and len(support_dataset.data_dict[name]) >= min_support_vids
-            ]
+        self.category_names = get_valid_categories(query_dataset, support_dataset, n_support, n_query, val_tuning_dataset)
         
         if len(self.category_names) < n_way:
             raise ValueError(f"Only {len(self.category_names)} valid categories for few-shot tasks with the given parameters. Needs at least {n_way} categories for {n_way}-way few-shot tasks.")
@@ -145,3 +136,24 @@ class FewShotTaskDataset(torch.utils.data.IterableDataset):
             
     def __len__(self):
         return self.n_episodes
+    
+    
+    
+    
+'''
+Helper function for getting all valid class names for a given task setup.
+Moved to separate function to allow hyperparam_search.py to call manually and infer n_way automatically
+'''
+def get_valid_categories(query_dataset: DatasetHandler, support_dataset: DatasetHandler, n_support: int, n_query: Optional[int], val_tuning_dataset: Optional[DatasetHandler]) -> List[str]:
+    if query_dataset.id() == support_dataset.id():
+        min_category_vids = n_support + (n_query or 1)
+        category_names = [name for name, vids in query_dataset.data_dict.items() if len(vids) >= min_category_vids and (val_tuning_dataset is None or name in val_tuning_dataset.data_dict)]
+    else:
+        min_query_vids = n_query or 1
+        min_support_vids = n_support
+        category_names = [
+            name for name in query_dataset.data_dict
+            if name in support_dataset.data_dict and len(query_dataset.data_dict[name]) >= min_query_vids and len(support_dataset.data_dict[name]) >= min_support_vids and (val_tuning_dataset is None or name in val_tuning_dataset.data_dict)
+        ]
+        
+    return category_names

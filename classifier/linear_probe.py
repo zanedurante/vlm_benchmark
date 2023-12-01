@@ -41,7 +41,7 @@ class LinearProbe(FewShotClassifier):
                                             category names and support videos) for each query video path.
                                             Shape = (n_predict,).
     '''
-    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray,
+    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray, query_video_labels: np.ndarray,
                 val_tuning_video_paths: Optional[np.array] = None, val_tuning_video_labels: Optional[np.array] = None) -> np.ndarray:
         n_way = category_names.shape[0]
         n_predict = query_video_paths.shape[0]
@@ -57,7 +57,8 @@ class LinearProbe(FewShotClassifier):
             text_embeds = np.array([self.vlm.get_text_embeds(name) for name in category_names])
             query_to_text_similarities = self.vlm.default_similarity_metric()(query_embeds, text_embeds)
             query_predictions = np.argmax(query_to_text_similarities, axis=1)
-            return query_predictions
+            accuracy = (query_predictions == query_video_labels).mean()
+            return accuracy
         
         # Linear probe ignoring text embeds
         query_embeds = np.array([self.vlm.get_video_embeds(vid) for vid in query_video_paths])
@@ -68,4 +69,5 @@ class LinearProbe(FewShotClassifier):
         classifier.fit(support_embeds, support_labels)
         
         query_predictions = classifier.predict(query_embeds)
-        return query_predictions
+        accuracy = (query_predictions == query_video_labels).mean()
+        return accuracy

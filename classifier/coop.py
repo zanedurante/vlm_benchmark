@@ -12,6 +12,7 @@ from similarity_metrics import Similarity
 from .base import FewShotClassifier
 
 QUERY_BATCH_SIZE = 2048 # Batch size used for iterating through non-training data
+MAX_QUERY_SAMPLES_PER_EPOCH = 2048 # Number of random samples to draw from val dataset if using val tuning
 
 '''
 Implementation of CoOp (https://arxiv.org/abs/2109.01134) for our framework.
@@ -34,7 +35,7 @@ class CoopFewShotClassifier(FewShotClassifier):
         self.optimizer = str(optimizer)
         self.random_augment = bool(random_augment)
         
-        assert optimizer in ["sgd", "adam"], "Invalid optimizer choice"
+        assert optimizer in ["sgd", "adam", "adamw"], "Invalid optimizer choice"
         
         # Save the latest progression of tuned class embeddings over epochs for visualization
         # {class name -> [orig text embed, tuned text embed epoch 0, epoch 1, ...]}
@@ -138,6 +139,8 @@ class CoopFewShotClassifier(FewShotClassifier):
             optimizer = torch.optim.SGD(coop_module.parameters(), lr=self.lr)
         elif self.optimizer == "adam":
             optimizer = torch.optim.Adam(coop_module.parameters(), lr=self.lr)
+        elif self.optimizer == "adamw":
+            optimizer = torch.optim.AdamW(coop_module.parameters(), lr=self.lr)
         else:
             raise NotImplementedError
         
@@ -206,6 +209,9 @@ class CoopFewShotClassifier(FewShotClassifier):
                         logits = coop_module(vid_embeds)
                     total_val_correct += (logits.argmax(dim=1) == vid_labels).sum()
                     total_val_count += len(vid_paths)
+
+                    if (batch_idx + 1) * QUERY_BATCH_SIZE >= MAX_QUERY_SAMPLES_PER_EPOCH:
+                        break
                     
                 val_acc = total_val_correct / total_val_count
                 if val_tuning_best_acc is None or val_acc >= val_tuning_best_acc:
@@ -230,7 +236,7 @@ class CoopFewShotClassifier(FewShotClassifier):
         with torch.no_grad():
             self.tuned_input_embeds = coop_module.tuned_class_input_word_embeds()
                 
-        query_dataloader = torch.utils.data.DataLoader(zip(query_video_paths, query_video_labels), batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
+        query_dataloader = torch.utils.data.DataLoader(list(zip(query_video_paths, query_video_labels)), batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
         query_correct = 0
         query_total = 0
         with torch.no_grad():
@@ -241,7 +247,7 @@ class CoopFewShotClassifier(FewShotClassifier):
                 ])
                 
                 logits = coop_module(batch_query_vid_embeds)
-                preds = torch.argmax(query_logits, dim=1).cpu()
+                preds = torch.argmax(logits, dim=1).cpu()
                 
                 query_correct += (preds == vid_labels).sum().item()
                 query_total += len(preds)

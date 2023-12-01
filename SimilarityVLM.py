@@ -99,7 +99,10 @@ class SimilarityVLM(ABC):
         """
         cache_item_key = self.text_cache_key(text=text)
         if self.disk_cache is not None and cache_item_key in self.disk_cache:
-            return self.disk_cache[cache_item_key]
+            try:
+                return self.disk_cache[cache_item_key]
+            except pickle.UnpicklingError:
+                del self.disk_cache[cache_item_key]
         
         text_embed = self.text_encoder(text)
         
@@ -120,7 +123,10 @@ class SimilarityVLM(ABC):
         """
         cache_item_key = self.video_cache_key(video_path, subvideo_start_frame=subvideo_start_frame, subvideo_end_frame=subvideo_end_frame)
         if self.disk_cache is not None and cache_item_key in self.disk_cache:
-            return self.disk_cache[cache_item_key]
+            try:
+                return self.disk_cache[cache_item_key]
+            except pickle.UnpicklingError:
+                del self.disk_cache[cache_item_key]
         
         vid_embed = self.video_encoder(video_path, subvideo_start_frame=subvideo_start_frame, subvideo_end_frame=subvideo_end_frame)
         

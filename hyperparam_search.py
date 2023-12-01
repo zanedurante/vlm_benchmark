@@ -10,7 +10,7 @@ import skopt.plots
 import argparse
 
 from FewShotTestHandler import FewShotTestHandler, optimize_hyperparameters, find_hyperparameters, test_already_stored, filter_test_results
-from dataset import DatasetHandler
+from dataset import DatasetHandler, get_valid_categories
 from similarity_metrics import Similarity
 from plotting_utils import plot
 
@@ -86,11 +86,14 @@ VLM Setup
 fixed_vlm_kwargs = {} # VLM keyword parameters to pass to constructor
 vlm_hyperparams = [] # Hyperparameter spaces in skopt format
 if args.vlm == "clip":
-    #from CLIP.CLIPVLM import ClipVLM as VLM
-    #fixed_vlm_kwargs["num_frames"] = 10
-    from VIFI_CLIP.wrapper import ViFiCLIP_SimilarityVLM as VLM
-    fixed_vlm_kwargs["num_frames"] = 32
-    fixed_vlm_kwargs["load_vifi"] = False
+    from CLIP.CLIPVLM import ClipVLM as VLM
+    fixed_vlm_kwargs["num_frames"] = 10
+    
+    # Note: For better comparison with ViFi it may be worth using the vifi
+    # class for CLIP as well, ensuring the same CLIP backbone without the vifi checkpoint
+    #from VIFI_CLIP.wrapper import ViFiCLIP_SimilarityVLM as VLM
+    #fixed_vlm_kwargs["num_frames"] = 32
+    #fixed_vlm_kwargs["load_vifi"] = False
 elif args.vlm == "miles":
     from MILES.wrapper import MILES_SimilarityVLM as VLM
 elif args.vlm == "videoclip":
@@ -122,7 +125,7 @@ if args.classifier == "vl_proto":
     ))
     classifier_hyperparams.append(skopt.space.Categorical(
         ["tip_adapter", "vid_action"],
-        name="prompt_ensembling"
+        name="prompt_ensemble_id"
     ))
 elif args.classifier == "hard_prompt_vl_proto":
     from classifier import HardPromptFewShotClassifier as Classifier
@@ -323,10 +326,15 @@ elif args.classifier == "vl_prompt_name_tuning":
     from classifier.vl_prompt_name_tuning import VLPromptNameTuningFewShotClassifier as Classifier
     fixed_classifier_kwargs["batch_size"] = 2
     fixed_classifier_kwargs["accumulation_steps"] = 4
-    
+    fixed_classifier_kwargs["name_regularization"] = 100
+
     classifier_hyperparams.append(skopt.space.Categorical(
-        [0.1, 1, 10],
-        name="name_regularization"
+        ["adamw", "sgd"],
+        name="optimizer"
+    ))
+    classifier_hyperparams.append(skopt.space.Categorical(
+        [0.1, 1.0],
+        name="name_lr_multiplier"
     ))
     
 else:
@@ -368,6 +376,9 @@ for key, val_list in unknown_args.items():
                 classifier_hyperparams[matched_name_hyperparam_inds[0]] = new_hyperparam
             else:
                 classifier_hyperparams.append(new_hyperparam)
+    elif key.startswith("test.") or key.startswith("dataset."):
+        test_params_dict[key] = val_list
+    
     else:
         raise ValueError(f"Unrecognized argument: --{' '.join([key] + val_list)}")
 
@@ -431,9 +442,12 @@ for test_params in pbar:
         
         cur_dataset_kwargs = dataset_kwargs
         
-    # Convert n_way = None into n_way = max-ways
+    # Convert n_way = None into n_way = max-ways (ensuring each category has enough datapoints per split)
     if test_kwargs["n_way"] is None:
-        test_kwargs["n_way"] = min(query_dataset_val.category_count(), query_dataset_test.category_count())
+        test_kwargs["n_way"] = min(
+            len(get_valid_categories(query_dataset_val, support_dataset_val, test_kwargs["n_support"], test_kwargs["n_query"], val_tuning_dataset)),
+            len(get_valid_categories(query_dataset_test, support_dataset_test, test_kwargs["n_support"], test_kwargs["n_query"], val_tuning_dataset))
+        )
         
     '''
     Define functions for skopt optimizer methods, or for generally running tests with any sampled hyperparam values

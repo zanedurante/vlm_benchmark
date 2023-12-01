@@ -23,9 +23,9 @@ def distributed_run(rank, world_size):
     from FewShotTestHandler import FewShotTestHandler
     from dataset import DatasetHandler
     from VIFI_CLIP import ViFiCLIP_SimilarityVLM as VLM
-    from classifier import VLPromptFewShotClassifier as Classifier
+    from classifier import VLPromptNameTuningFewShotClassifier as Classifier
     
-    test_handler = FewShotTestHandler("temp.csv")
+    test_handler = FewShotTestHandler("temp_nt.csv")
     
     name = sys.argv[1]
     support_dataset = DatasetHandler(name, split="train")
@@ -38,14 +38,15 @@ def distributed_run(rank, world_size):
     
     classifier = Classifier(
         vlm,
+        name_regularization=1,
         text_context_len=10,
         text_context_depth=12,
         vision_context_len=10,
         vision_context_depth=12,
         lr=8e-3,
-        batch_size=4,
-        accumulation_steps=64 // (4 * world_size), # Set accumulation steps to be equivalent to ViFiCLIP's batch-size of 64
-        epochs=50,
+        batch_size=2,
+        accumulation_steps=4,#64 // (2 * world_size), # Set accumulation steps to be equivalent to ViFiCLIP's batch-size of 64
+        epochs=20,
         optimizer="adamw"
     )
     

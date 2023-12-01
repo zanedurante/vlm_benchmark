@@ -77,7 +77,7 @@ class VideoLoadingDataset(torch.utils.data.Dataset):
         scale_resize = int(256 / 224 * INPUT_SIZE)
         if eval_mode:
             self.pipeline = Compose([
-                dict(type='DecordInit'),
+                dict(type='DecordInit', num_threads=1),
                 dict(type='SampleFrames', clip_len=1, frame_interval=1, num_clips=num_frames, test_mode=True),
                 dict(type='DecordDecode'),
                 dict(type='Resize', scale=(-1, scale_resize)),
@@ -89,7 +89,7 @@ class VideoLoadingDataset(torch.utils.data.Dataset):
             ])
         else:
             self.pipeline = Compose([
-                dict(type='DecordInit'),
+                dict(type='DecordInit', num_threads=1),
                 dict(type='SampleFrames', clip_len=1, frame_interval=1, num_clips=num_frames),
                 dict(type='DecordDecode'),
                 dict(type='Resize', scale=(-1, scale_resize)),
@@ -164,6 +164,7 @@ class Accumulator:
 class VLPromptNameTuningFewShotClassifier(FewShotClassifier):
     def __init__(self, vlm: SimilarityVLM,
                  name_regularization: float = 1.0,
+                 name_lr_multiplier: float = 1.0,
                  text_context_len: int = 10,
                  text_context_depth: int = 12,
                  vision_context_len: int = 10,
@@ -180,6 +181,7 @@ class VLPromptNameTuningFewShotClassifier(FewShotClassifier):
         self.vlm = vlm
         
         self.name_regularization = float(name_regularization)
+        self.name_lr_multiplier = float(name_lr_multiplier)
         self.text_context_len = int(text_context_len)
         self.text_context_depth = int(text_context_depth)
         self.vision_context_len = int(vision_context_len)
@@ -203,6 +205,7 @@ class VLPromptNameTuningFewShotClassifier(FewShotClassifier):
     def params(self) -> dict:
         return {
             "name_regularization": self.name_regularization,
+            "name_lr_multiplier": self.name_lr_multiplier,
             "text_context_len": self.text_context_len,
             "text_context_depth": self.text_context_depth,
             "vision_context_len": self.vision_context_len,
@@ -369,14 +372,24 @@ class VLPromptNameTuningFewShotClassifier(FewShotClassifier):
                 broadcast_buffers=False,
                 find_unused_parameters=False
             )
-        #print(list(module.named_parameters()))
+
+        if torch.distributed.is_initialized():
+            optim_input = [
+                {"params": module.module.name_perturbation, "lr": self.name_lr_multiplier * self.lr},
+                {"params": [param for name, param in module.module.named_parameters() if name not in ["name_perturbation"]]}
+            ]
+        else:
+            optim_input = [
+                {"params": module.name_perturbation, "lr": self.name_lr_multiplier * self.lr},
+                {"params": [param for name, param in module.named_parameters() if name not in ["name_perturbation"]]}
+            ]
         
         if self.optimizer == "sgd":
-            optimizer = torch.optim.SGD(module.parameters(), lr=self.lr)
+            optimizer = torch.optim.SGD(optim_input, lr=self.lr)
         elif self.optimizer == "adam":
-            optimizer = torch.optim.Adam(module.parameters(), lr=self.lr, betas=(0.9, 0.98), eps=1e-8)
+            optimizer = torch.optim.Adam(optim_input, lr=self.lr, betas=(0.9, 0.98), eps=1e-8)
         elif self.optimizer == "adamw":
-            optimizer = torch.optim.AdamW(module.parameters(), lr=self.lr, betas=(0.9, 0.98), eps=1e-8)
+            optimizer = torch.optim.AdamW(optim_input, lr=self.lr, betas=(0.9, 0.98), eps=1e-8)
             
         scheduler = torch.optim.lr_scheduler.SequentialLR(
             optimizer,
@@ -447,7 +460,10 @@ class VLPromptNameTuningFewShotClassifier(FewShotClassifier):
                     loss = criterion(logits, vid_labels)
                     
                     # Add name regularization term
-                    reg_loss = 0.5 * self.name_regularization * module.name_perturbation.pow(2).sum()
+                    if torch.distributed.is_initialized():
+                        reg_loss = 0.5 * self.name_regularization * module.module.name_perturbation.pow(2).sum()
+                    else:
+                        reg_loss = 0.5 * self.name_regularization * module.name_perturbation.pow(2).sum()
                     loss = loss + reg_loss
                     
                     # Scale down loss for accumulation steps
@@ -602,6 +618,10 @@ class VLPrompt_Module(nn.Module):
             self.vision_context = nn.Parameter(vision_context)
         else:
             self.vision_context = None
+            
+    # Name-Perturbation magnitude^2 for L2 regularization calculation
+    def name_perturbation_l2(self):
+        return self.name_perturbation.pow(2).sum()
 
     # Compute the text branch for all category names
     def tuned_text_embeds(self):

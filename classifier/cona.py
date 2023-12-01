@@ -12,6 +12,7 @@ from similarity_metrics import Similarity
 from .base import FewShotClassifier
 
 QUERY_BATCH_SIZE = 2048 # Batch size used for iterating through non-training data
+MAX_QUERY_SAMPLES_PER_EPOCH = 2048 # Number of random samples to draw from val dataset if using val tuning
 
 '''
 Implementation of our algorithm: Context Name Optimization.
@@ -85,7 +86,7 @@ class CoNaFewShotClassifier(FewShotClassifier):
                                             category names and support videos) for each query video path.
                                             Shape = (n_predict,).
     '''
-    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray,
+    def predict(self, category_names: np.ndarray, support_video_paths: Optional[np.ndarray], query_video_paths: np.ndarray, query_video_labels: np.ndarray,
                 val_tuning_video_paths: Optional[np.array] = None, val_tuning_video_labels: Optional[np.array] = None) -> np.ndarray:
         n_way = len(category_names)
         n_predict = query_video_paths.shape[0]
@@ -108,9 +109,10 @@ class CoNaFewShotClassifier(FewShotClassifier):
             query_class_logits = (self.vlm.logit_scale() * query_to_text_similarities)
             self.query_class_probabilities = np.exp(query_class_logits) / np.sum(np.exp(query_class_logits), axis=1, keepdims=True)
             
-            # Return direct predictions
+            # Return accuracy
             query_predictions = np.argmax(query_to_text_similarities, axis=1)
-            return query_predictions
+            accuracy = (query_predictions == query_video_labels).mean()
+            return accuracy
         
         # Save original text embeds for visualization
         # Tuned text embeds will be added to this list
@@ -217,6 +219,9 @@ class CoNaFewShotClassifier(FewShotClassifier):
                         logits = cona_module(vid_embeds)
                     total_val_correct += (logits.argmax(dim=1) == vid_labels).sum()
                     total_val_count += len(vid_paths)
+
+                    if (batch_idx + 1) * QUERY_BATCH_SIZE >= MAX_QUERY_SAMPLES_PER_EPOCH:
+                        break
                     
                 val_acc = total_val_correct / total_val_count
                 if val_tuning_best_acc is None or val_acc >= val_tuning_best_acc:
@@ -242,22 +247,22 @@ class CoNaFewShotClassifier(FewShotClassifier):
         with torch.no_grad():
             self.tuned_input_embeds = cona_module.tuned_class_input_word_embeds()
                 
-        query_dataloader = torch.utils.data.DataLoader(query_video_paths, batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
+        query_dataloader = torch.utils.data.DataLoader(list(zip(query_video_paths, query_video_labels)), batch_size=QUERY_BATCH_SIZE, num_workers=0, shuffle=False)
+        query_correct = 0
+        query_total = 0
         with torch.no_grad():
-            query_logits = []
-            for batch_idx, vid_paths in enumerate(query_dataloader):
+            for batch_idx, (vid_paths, vid_labels) in enumerate(query_dataloader):
                 batch_query_vid_embeds = torch.cat([
                     torch.from_numpy(self.vlm.get_video_embeds(vid_path)).unsqueeze(0).to(DEVICE)
                     for vid_path in vid_paths
                 ])
-                query_logits.append(cona_module(batch_query_vid_embeds))
-            query_logits = torch.cat(query_logits, dim=0)
-            
-            # Save class probabilities
-            self.query_class_probabilities = torch.softmax(query_logits, dim=1).cpu().numpy()
-                
-            query_predictions = torch.argmax(query_logits, dim=1).cpu().numpy()
-            return query_predictions
+                logits = cona_module(batch_query_vid_embeds)
+                preds = logits.argmax(dim=1).cpu()
+                query_correct += (preds == vid_labels).sum().item()
+                query_total += len(preds)
+
+        accuracy = query_correct / query_total
+        return accuracy
         
                 
         

@@ -28,7 +28,8 @@ MOMA_DIR = None
 HMDB_51_DIR = "/next/u/rharries/vlm_benchmark.data/hmdb_51"
 UCF_101_DIR = "/next/u/rharries/vlm_benchmark.data/ucf_101"
 SSV2_DIR = "/next/u/rharries/vlm_benchmark.data/ssv2"
-IADL_DIR = "/next/u/rharries/vlm_benchmark.data/InteractADL_egoview_actions"
+IADL_DIR = "/next/u/rharries/vlm_benchmark.data/InteractADL_egoview_actions_subclips_resized"
+IADL_ACTIVITIES_DIR = "/next/u/rharries/vlm_benchmark.data/InteractADL_egoview_activities_subclips"
 
 
 DEFAULT_MIN_TRAIN_VIDS = 16
@@ -380,13 +381,38 @@ class DatasetHandler:
                 if split in ["train", "val", "test"]:
                     with open(os.path.join(IADL_DIR, "splits", f"{split}.json"), "r") as fp:
                         self.data_dict = json.load(fp)
+                    for key in list(self.data_dict.keys()):
+                        if len(self.data_dict[key]) == 0:
+                            del self.data_dict[key]
                 elif split == "all":
                     raise NotImplementedError
-                        
+
                 # Prepend base data dir to relative video paths
                 for category, vids in self.data_dict.items():
                     for i in range(len(vids)):
                         vids[i] = os.path.join(IADL_DIR, vids[i])
+                
+            elif split_type == "class":
+                raise NotImplementedError
+            
+        elif name == "iadl_activities":
+            # Force no min_train_videos filtering (use as many categories as possible given number of shots in test)
+            min_train_videos = 0
+
+            if split_type == "video":
+                if split in ["train", "val", "test"]:
+                    with open(os.path.join(IADL_ACTIVITIES_DIR, "splits", f"{split}.json"), "r") as fp:
+                        self.data_dict = json.load(fp)
+                    for key in list(self.data_dict.keys()):
+                        if len(self.data_dict[key]) == 0:
+                            del self.data_dict[key]
+                elif split == "all":
+                    raise NotImplementedError
+
+                # Prepend base data dir to relative video paths
+                for category, vids in self.data_dict.items():
+                    for i in range(len(vids)):
+                        vids[i] = os.path.join(IADL_ACTIVITIES_DIR, vids[i])
                 
             elif split_type == "class":
                 raise NotImplementedError
