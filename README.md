@@ -1,45 +1,9 @@
 # vlm_benchmark
-Code for benchmarking contrastive VLMs on zero and few-shot activity recognition. 
+Code for benchmarking contrastive VLMs on zero and few-shot activity recognition. Setup instructions can be found in `SETUP.md`.
 
-## Current citation for the project
-```
-@InProceedings{durante2023cona,
-  title={CoNa: Context-Name Tuning for Few-shot Activity Recognition},
-  author={Durante, Zane and Harries, Robathan and Luo, Zelun and Sun, Adam and Agarwal, Pratyush and Adeli, Ehsan and Fei-Fei, Li},
-  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
-  year={\noop{2023} in submission}
-}
-```
+The main entry point for our experiments is in `hyperparam_search.py`. We launch a run with a given VLM, classifier, dataset and number of shots with:
+`python hyperparam_search.py <VLM> <classifier> --dataset <dataset> --n_shots <number_of_shots>`.  
 
-## Project Roadmap (before CVPR deadline):
-- [x] Create unified framework for contrastive VLMs
-- [x] Create caching system for faster embedding retrieval
-- [x] CLIP Model
-- [x] MILES 
-- [x] VideoCLIP
-- [x] UNIVL
-- [x] VTTTwins
-- [x] Implement general VL-prototype classifier
-- [x] Implement general CoOp classifier
-- [ ] Implement general Name-Optimizer classifier
-- [ ] Add OpenAI clip implementation (instead of huggingface)
+By default for all classifiers and datasets, we find the optimal set of hyperparameters for the validation set, and report results from a fresh run of the same hyperparameters on the test set to avoid spurious results from testing various hyperparameter settings for our methods.  We include our explicit hyperparameter tuning process in our codebase for transparency and reproducbility, and note that we only search over a small number of hyperparameters (<5 for each classifier) for fair comparison.  We use default hyperparameter settings from papers and codebases when available.
 
-=========================================================================
-
-## Project Roadmap (after CVPR deadline):
-- [ ] Frozen-in-time
-- [ ] Add linear probe classifier to the repo
-- [ ] Update README
-- [ ] Create repo setup instructions
-- [ ] Create a quickstart guide 
-- [ ] Merge into single conda environment
-- [ ] Test on multiple GCP instances to ensure setup works easily
-- [ ] Allow for easy replication of our results in the paper
-- [ ] Add link to paper in README
-
-
-## Future plans (unclear):
-- [ ] Add caching support for video augmentations -- is this feasible by using RandAugment + RandomResizedCrop (only four added hyperparameters)?
-- [ ] Add video-only models using similar framework
-- [ ] Add non-contrastive VLMs
-- [ ] Create video model training repo with easy interfacing with this repo (allows for full-finetuning)
+This README has been modified to remove some details to comply with double-blind review policies. Upon acceptance, we will revert some aspects of this README to its original state. 
