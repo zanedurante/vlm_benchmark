@@ -222,7 +222,7 @@ elif args.classifier == "cona":
         name="lr"
     ))
     classifier_hyperparams.append(skopt.space.Categorical(
-        [10],
+        [1, 5, 10, 20],
         name="name_regularization"
     ))
     
